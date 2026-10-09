@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Intelligence Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="dash">
+    <header class="dash-top">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">TI</span>
+        <div>
+          <h1>Trading Intelligence</h1>
+          <p class="sub">information-arbitrage &amp; opportunity detection</p>
+        </div>
+      </div>
+      <nav class="dash-nav" id="dash-nav"></nav>
+      <div class="dash-status" id="dash-status"></div>
+    </header>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <main class="dash-main">
+      <section id="view" class="dash-view"></section>
+    </main>
+
+    <script src="./dashboard.js"></script>
+  </body>
+</html>

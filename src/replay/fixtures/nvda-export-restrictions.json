@@ -1,0 +1,103 @@
+{
+  "id": "nvda-export-restrictions",
+  "title": "NVDA — export-restriction reports (labelled synthetic fixture)",
+  "description": "Synthetic demonstration scenario. NVDA diverges sharply from the SOXX/SPY benchmarks while a cluster of export-restriction reports and a company response appear. All prices, articles and timestamps are fabricated for demonstration purposes and are clearly not real market data. Timestamps are absolute UTC; the engine only uses information available at or before decisionTime.",
+  "synthetic": true,
+  "baseTime": "2025-05-22T13:30:00Z",
+  "decisionTime": "2025-05-22T14:12:00Z",
+  "previousClose": { "NVDA": 135.0, "AMD": 160.0, "TSM": 174.0, "SOXX": 234.0, "SPY": 520.0 },
+  "benchmarks": { "NVDA": "SOXX", "AMD": "SOXX", "TSM": "SOXX" },
+  "peers": { "NVDA": ["AMD", "TSM"], "AMD": ["NVDA", "TSM"] },
+  "watchSymbols": ["NVDA", "AMD", "TSM"],
+  "observations": [
+    { "ts": "2025-05-22T13:30:00Z", "symbol": "NVDA", "price": 135.0 },
+    { "ts": "2025-05-22T13:40:00Z", "symbol": "NVDA", "price": 134.2 },
+    { "ts": "2025-05-22T13:50:00Z", "symbol": "NVDA", "price": 132.0 },
+    { "ts": "2025-05-22T14:00:00Z", "symbol": "NVDA", "price": 129.5 },
+    { "ts": "2025-05-22T14:10:00Z", "symbol": "NVDA", "price": 127.6 },
+    { "ts": "2025-05-22T14:20:00Z", "symbol": "NVDA", "price": 126.9 },
+
+    { "ts": "2025-05-22T13:30:00Z", "symbol": "AMD", "price": 160.0 },
+    { "ts": "2025-05-22T13:40:00Z", "symbol": "AMD", "price": 159.4 },
+    { "ts": "2025-05-22T13:50:00Z", "symbol": "AMD", "price": 158.9 },
+    { "ts": "2025-05-22T14:00:00Z", "symbol": "AMD", "price": 158.3 },
+    { "ts": "2025-05-22T14:10:00Z", "symbol": "AMD", "price": 158.0 },
+
+    { "ts": "2025-05-22T13:30:00Z", "symbol": "TSM", "price": 174.0 },
+    { "ts": "2025-05-22T13:40:00Z", "symbol": "TSM", "price": 174.2 },
+    { "ts": "2025-05-22T13:50:00Z", "symbol": "TSM", "price": 174.0 },
+    { "ts": "2025-05-22T14:00:00Z", "symbol": "TSM", "price": 173.8 },
+    { "ts": "2025-05-22T14:10:00Z", "symbol": "TSM", "price": 174.1 },
+
+    { "ts": "2025-05-22T13:30:00Z", "symbol": "SOXX", "price": 234.0 },
+    { "ts": "2025-05-22T13:40:00Z", "symbol": "SOXX", "price": 233.4 },
+    { "ts": "2025-05-22T13:50:00Z", "symbol": "SOXX", "price": 232.6 },
+    { "ts": "2025-05-22T14:00:00Z", "symbol": "SOXX", "price": 232.0 },
+    { "ts": "2025-05-22T14:10:00Z", "symbol": "SOXX", "price": 231.5 },
+
+    { "ts": "2025-05-22T13:30:00Z", "symbol": "SPY", "price": 520.0 },
+    { "ts": "2025-05-22T13:40:00Z", "symbol": "SPY", "price": 519.6 },
+    { "ts": "2025-05-22T13:50:00Z", "symbol": "SPY", "price": 519.2 },
+    { "ts": "2025-05-22T14:00:00Z", "symbol": "SPY", "price": 518.8 },
+    { "ts": "2025-05-22T14:10:00Z", "symbol": "SPY", "price": 518.4 }
+  ],
+  "articles": [
+    {
+      "ts": "2025-05-22T13:38:00Z",
+      "title": "US weighs new export restrictions on advanced AI chips",
+      "source": "Reuters",
+      "domain": "reuters.com",
+      "url": "https://reuters.com/fixture/us-weighs-new-export-restrictions",
+      "snippet": "Washington is considering fresh limits on advanced chip sales, people familiar with the matter said.",
+      "symbols": ["NVDA"]
+    },
+    {
+      "ts": "2025-05-22T13:47:00Z",
+      "title": "US weighs fresh export curbs on AI chips, sources say",
+      "source": "Bloomberg",
+      "domain": "bloomberg.com",
+      "url": "https://bloomberg.com/fixture/us-weighs-fresh-export-curbs",
+      "snippet": "The administration is weighing additional export controls affecting AI accelerators, according to people familiar.",
+      "symbols": ["NVDA"]
+    },
+    {
+      "ts": "2025-05-22T13:55:00Z",
+      "title": "White House considering limits on AI chip sales overseas",
+      "source": "CNBC",
+      "domain": "cnbc.com",
+      "url": "https://cnbc.com/fixture/white-house-considering-ai-chip-limits",
+      "snippet": "Officials are discussing narrower restrictions on AI accelerator exports.",
+      "symbols": ["NVDA"]
+    },
+    {
+      "ts": "2025-05-22T14:02:00Z",
+      "title": "New export rules could hit chipmakers, analysts warn",
+      "source": "The Verge",
+      "domain": "theverge.com",
+      "url": "https://theverge.com/fixture/new-export-rules-could-hit-chipmakers",
+      "snippet": "Analysts said proposed rules could pressure data-centre segments if enacted.",
+      "symbols": ["NVDA", "AMD"]
+    },
+    {
+      "ts": "2025-05-22T14:05:00Z",
+      "title": "Chipmaker responds to export restrictions report, sees no material impact",
+      "source": "Company IR",
+      "domain": "company-ir.example",
+      "url": "https://company-ir.example/fixture/response-export-restrictions",
+      "snippet": "The company said it does not expect a material near-term impact and is monitoring the situation.",
+      "symbols": ["NVDA"]
+    },
+    {
+      "ts": "2025-05-20T15:00:00Z",
+      "title": "Analyst raises price target on data-centre demand",
+      "source": "Barron's",
+      "domain": "barrons.com",
+      "url": "https://barrons.com/fixture/analyst-raises-price-target",
+      "snippet": "A sell-side analyst lifted the price target, citing continued data-centre demand.",
+      "symbols": ["NVDA"]
+    }
+  ],
+  "postDecision": [
+    { "ts": "2025-05-22T14:20:00Z", "symbol": "NVDA", "price": 126.9, "note": "Post-decision observation, shown for evaluation only — not used in scoring." }
+  ]
+}
