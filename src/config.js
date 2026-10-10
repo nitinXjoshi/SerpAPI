@@ -19,6 +19,9 @@ const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path
 export const config = {
   root: ROOT,
   port: num(process.env.PORT, 3000),
+  /** Bind to loopback by default so the dashboard is not exposed on the LAN. */
+  host: process.env.HOST || '127.0.0.1',
+  trustProxy: bool(process.env.TRUST_PROXY, false),
   dataDir,
   dbPath: process.env.DB_PATH || path.join(dataDir, 'intel.db'),
   demoMode: bool(process.env.DEMO_MODE, false),
@@ -29,6 +32,20 @@ export const config = {
     timeoutMs: num(process.env.OLLAMA_TIMEOUT_MS, 60000),
   },
   logLevel: process.env.LOG_LEVEL || 'info',
+  csp: {
+    enabled: bool(process.env.CSP_ENABLED, true),
+  },
+  auth: {
+    username: process.env.ADMIN_USERNAME || 'admin',
+    password: process.env.ADMIN_PASSWORD || null,
+    token: process.env.ADMIN_TOKEN || null,
+    /** Explicit, opt-in, insecure local-only bypass. Never enabled by default. */
+    disabled: bool(process.env.AUTH_DISABLED, false),
+    sessionTtlMinutes: Math.max(5, num(process.env.SESSION_TTL_MINUTES, 480)),
+    cookieName: process.env.SESSION_COOKIE_NAME || 'ti_session',
+    maxLoginAttempts: Math.max(3, num(process.env.AUTH_MAX_ATTEMPTS, 10)),
+    loginWindowMinutes: Math.max(1, num(process.env.AUTH_WINDOW_MINUTES, 15)),
+  },
 };
 
 /** Runtime-tunable settings (persisted in the DB; these are the defaults). */

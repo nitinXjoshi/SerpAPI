@@ -31,4 +31,12 @@ test('secrets are encrypted at rest, masked in metadata and never leaked', () =>
 
   deleteSecret('serpapi_api_key');
   assert.equal(getSecretValue('serpapi_api_key'), null);
+
+  // Tampered/corrupted ciphertext must fail safely: no throw, no plaintext, null result.
+  putSecret('twelvedata_api_key', 'another-secret-value-1234567890');
+  assert.equal(getSecretValue('twelvedata_api_key'), 'another-secret-value-1234567890');
+  getDb()
+    .prepare('UPDATE secrets SET ciphertext = ? WHERE name = ?')
+    .run(Buffer.from('tampered-bytes').toString('base64'), 'twelvedata_api_key');
+  assert.equal(getSecretValue('twelvedata_api_key'), null, 'failed decryption must return null');
 });

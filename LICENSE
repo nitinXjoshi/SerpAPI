@@ -1,0 +1,30 @@
+# License status: UNDECIDED — no license granted
+
+Copyright (c) 2026 Nitin Joshi. **All rights reserved.**
+
+No open-source license has been chosen for this repository yet. Until a license is added,
+no permission is granted to use, copy, modify, or distribute this software, and the default
+"all rights reserved" copyright applies.
+
+## Why this file says this
+
+Choosing a license is a deliberate legal decision. Rather than have a tool pick one on the
+author's behalf, this file records that the decision is still pending.
+
+## How to resolve it before a public release
+
+1. Decide whether the project should be open source, and under which terms.
+2. If open source, replace this file with a conventional permissive license such as
+   [MIT](../) or [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) (Apache-2.0 also
+   includes an explicit patent grant).
+3. If not open source, replace this file with an explicit proprietary license.
+
+## Third-party components
+
+Runtime dependencies (`express`, `dotenv`) and any transitive dependencies remain under
+their own licenses; see `node_modules/*/LICENSE` after `npm install`.
+
+## Data and credentials
+
+This repository must never contain real API keys, `.env` files, SQLite databases, encryption
+keys, or logs. Those live only on the operator's machine (see `.gitignore` and `SECURITY.md`).

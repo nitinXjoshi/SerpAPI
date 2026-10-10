@@ -32,6 +32,19 @@ function dt(iso) {
   return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+/** Authentication/session state. */
+let session = { authenticated: false, mode: 'required', method: 'token', user: null, demoMode: false };
+
+async function refreshSession() {
+  try {
+    const res = await fetch('/api/auth/session', { headers: { Accept: 'application/json' } });
+    session = await res.json();
+  } catch {
+    session = { authenticated: false, mode: 'required', method: 'token', user: null, demoMode: false };
+  }
+  return session;
+}
+
 async function api(path, opts) {
   const res = await fetch(path, {
     headers: opts?.body ? { 'Content-Type': 'application/json' } : undefined,
@@ -39,8 +52,24 @@ async function api(path, opts) {
     body: opts?.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    const err = new Error(data.error || 'Authentication required.');
+    err.code = 401;
+    throw err;
+  }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+async function logout() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch {
+    /* ignore */
+  }
+  session = { authenticated: false, mode: 'required', method: 'token', user: null, demoMode: false };
+  $('#dash-nav').innerHTML = '';
+  renderLogin();
 }
 
 let toastTimer;
@@ -59,6 +88,40 @@ const DECISION = {
   no_trade: { label: 'NO TRADE', cls: 'no' },
 };
 
+const EVENT_STATUSES = ['all', 'new', 'acknowledged', 'saved', 'dismissed', 'following'];
+let eventFilter = { search: '', status: 'all', sort: 'recent', symbol: '' };
+
+function isDemo() {
+  return session.mode === 'demo';
+}
+
+/** Prominent, always-visible notice explaining the demo's data provenance. */
+function demoBanner() {
+  if (!isDemo()) return '';
+  return `<div class="demo-banner" role="status">
+    <strong>DEMO MODE</strong> — read-only, simulated fixture data.
+    No SerpApi, Twelve Data or Ollama requests are made, and your real data and keys are never touched.
+  </div>`;
+}
+
+/** Marks a control that is intentionally unavailable in read-only demo mode. */
+function unavailableAttr() {
+  return isDemo() ? 'disabled title="Unavailable in read-only demo mode"' : '';
+}
+
+/**
+ * Register the single delegated click handler for the current view.
+ * #view is a persistent node, so adding a listener per render would accumulate
+ * handlers and fire an action multiple times.
+ */
+let viewClickHandler = null;
+function onViewClick(handler) {
+  const view = $('#view');
+  if (viewClickHandler) view.removeEventListener('click', viewClickHandler);
+  viewClickHandler = handler;
+  view.addEventListener('click', viewClickHandler);
+}
+
 const ROUTES = [
   ['#/radar', 'Market Radar'],
   ['#/events', 'Event Feed'],
@@ -74,19 +137,91 @@ function renderNav(active) {
 }
 
 async function renderStatusBar() {
+  if (!session.authenticated) {
+    $('#dash-status').innerHTML = '<span class="pill muted">signed out</span>';
+    return null;
+  }
   try {
     const s = await api('/api/status');
     const keyed = s.secrets.filter((x) => x.configured).length;
+    const authPill = isDemo()
+      ? '<span class="pill warn">DEMO · read-only</span>'
+      : session.mode === 'disabled'
+        ? '<span class="pill warn">auth DISABLED</span>'
+        : `<span class="pill ok">signed in: ${esc(session.user || 'admin')}</span>`;
+    const modePill = s.demoMode
+      ? '<span class="pill warn" title="Fixture data only — no live provider calls">fixture data</span>'
+      : '<span class="pill ok">live-capable</span>';
     $('#dash-status').innerHTML = `
+      ${authPill}${modePill}
       <span class="pill ${s.monitoring.enabled ? 'ok' : 'muted'}">monitoring ${s.monitoring.enabled ? 'ON' : 'off'}</span>
       <span class="pill">${esc(s.scheduler ? (s.scheduler.lockHeld ? 'scheduler: leader' : 'scheduler: standby') : '')}</span>
-      <span class="pill ${s.ollama.available ? 'ok' : 'warn'}">ollama ${s.ollama.available ? esc(s.ollama.selectedModel || s.ollama.models?.[0] || 'ready') : 'offline'}</span>
-      <span class="pill">${keyed}/2 keys</span>`;
+      <span class="pill ${s.ollama.available ? 'ok' : 'warn'}">ollama ${s.ollama.available ? esc(s.ollama.selectedModel || s.ollama.models?.[0] || 'ready') : 'off'}</span>
+      <span class="pill">${isDemo() ? 'keys: demo' : `${keyed}/2 keys`}</span>
+      ${isDemo() || session.mode === 'disabled' ? '' : '<button class="btn small ghost" id="logout-btn" type="button">Sign out</button>'}`;
+    document.getElementById('logout-btn')?.addEventListener('click', logout);
     return s;
   } catch (e) {
+    if (e.code === 401) {
+      session.authenticated = false;
+      return renderLogin();
+    }
     $('#dash-status').innerHTML = `<span class="pill warn">status unavailable</span>`;
     return null;
   }
+}
+
+/** Render the sign-in screen. */
+function renderLogin(message) {
+  $('#dash-nav').innerHTML = '';
+  $('#dash-status').innerHTML = session.mode === 'disabled' ? '<span class="pill warn">auth DISABLED</span>' : '<span class="pill muted">signed out</span>';
+  const view = $('#view');
+  const needsUsername = session.method === 'password';
+  view.innerHTML = `
+    <div class="login-wrap">
+      <form class="card login-card" id="login-form" autocomplete="off">
+        <h2>Sign in</h2>
+        <p class="muted">Local admin access. Credentials are configured on the server
+          (${needsUsername ? 'ADMIN_USERNAME / ADMIN_PASSWORD' : 'ADMIN_TOKEN'}).</p>
+        ${message ? `<div class="login-error">${esc(message)}</div>` : ''}
+        ${needsUsername ? '<label class="field">Username<input id="l-user" autocomplete="username" required /></label>' : ''}
+        <label class="field">${needsUsername ? 'Password' : 'Admin token'}
+          <input id="l-secret" type="password" autocomplete="current-password" required /></label>
+        <div id="login-error" class="login-error" hidden></div>
+        <button class="btn" type="submit">Sign in</button>
+        ${session.demoMode ? '<p class="muted">Demo mode is on — synthetic fixture data, no paid API calls.</p>' : ''}
+      </form>
+    </div>`;
+
+  $('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = $('#login-error');
+    errEl.hidden = true;
+    const body = {};
+    if (needsUsername) body.username = $('#l-user').value;
+    const secret = $('#l-secret').value;
+    if (needsUsername) body.password = secret;
+    else body.token = secret;
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        errEl.textContent = data.error || 'Sign-in failed.';
+        errEl.hidden = false;
+        return;
+      }
+      await refreshSession();
+      await renderStatusBar();
+      await route();
+    } catch {
+      errEl.textContent = 'Sign-in failed.';
+      errEl.hidden = false;
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -104,6 +239,7 @@ async function viewRadar() {
   const acct = status.account;
 
   view.innerHTML = `
+    ${demoBanner()}
     <div class="dash-head">
       <div>
         <h2>Market Radar</h2>
@@ -114,8 +250,8 @@ async function viewRadar() {
         </p>
       </div>
       <div class="actions">
-        <button class="btn" data-act="poll">Run market poll</button>
-        <button class="btn" data-act="news">Run news cycle</button>
+        <button class="btn" data-act="poll" ${unavailableAttr()}>Run market poll</button>
+        <button class="btn" data-act="news" ${unavailableAttr()}>Run news cycle</button>
       </div>
     </div>
 
@@ -134,7 +270,7 @@ async function viewRadar() {
           <tbody>
             ${radar.rows.map((r) => `
               <tr class="${r.anomalous ? 'row-anom' : ''}">
-                <td><strong>${esc(r.symbol)}</strong>${r.anomalous ? ' <span class="pill warn">anomaly</span>' : ''}<br><span class="muted">${esc(r.companyName || '')}</span></td>
+                <td><a class="sym-link" href="#/events" data-symbol="${esc(r.symbol)}" title="Show events mentioning ${esc(r.symbol)}"><strong>${esc(r.symbol)}</strong></a>${r.anomalous ? ' <span class="pill warn">anomaly</span>' : ''}<br><span class="muted">${esc(r.companyName || '')}</span></td>
                 <td>${money(r.price, r.currency)}</td>
                 <td class="${cls(r.changePct)}">${pct(r.changePct)}</td>
                 <td class="${cls(r.divergence)}">${r.divergence == null ? '—' : pct(r.divergence)}<br><span class="muted">${esc(r.benchmarkSymbol || '')} ${r.benchmarkChangePct == null ? '' : pct(r.benchmarkChangePct)}</span></td>
@@ -152,7 +288,13 @@ async function viewRadar() {
       <div id="notifications" class="notif-list"><span class="muted">Loading…</span></div>
     </div>`;
 
-  view.addEventListener('click', async (e) => {
+  onViewClick(async (e) => {
+    const symLink = e.target.closest('[data-symbol]');
+    if (symLink) {
+      // Prepare the event filter, then let the anchor navigate to the feed.
+      eventFilter = { search: '', status: 'all', sort: 'recent', symbol: symLink.dataset.symbol };
+      return;
+    }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     e.target.disabled = true;
@@ -212,21 +354,77 @@ async function viewEvents() {
   renderNav('#/events');
   const view = $('#view');
   view.innerHTML = `<div class="loading"><div class="spinner"></div><p>Loading events…</p></div>`;
-  const { events } = await api('/api/events?limit=100');
+  const { events } = await api('/api/events?limit=200');
+  const all = Array.isArray(events) ? events : [];
 
   view.innerHTML = `
+    ${demoBanner()}
     <div class="dash-head">
-      <div><h2>Event Feed</h2><p class="muted">${events.length} events · deduplicated &amp; clustered</p></div>
+      <div><h2>Event Feed</h2><p class="muted">${all.length} clustered events · duplicate and syndicated reports grouped under one event</p></div>
       <div class="actions">
-        <button class="btn" data-act="investigate-pending">Investigate pending</button>
-        <button class="btn" data-act="news">Run news cycle</button>
+        <button class="btn" data-act="investigate-pending" ${unavailableAttr()}>Investigate pending</button>
+        <button class="btn" data-act="news" ${unavailableAttr()}>Run news cycle</button>
       </div>
     </div>
-    <div id="event-list" class="event-list">
-      ${events.length ? events.map(eventCard).join('') : '<div class="card">No events yet. Run a news cycle.</div>'}
-    </div>`;
+    <div class="card feed-toolbar" role="search">
+      <input id="feed-search" class="feed-input" type="search" placeholder="Search headline, symbol or source…" value="${esc(eventFilter.search)}" aria-label="Search events" />
+      <input id="feed-symbol" class="feed-input feed-symbol" type="text" placeholder="Symbol" value="${esc(eventFilter.symbol)}" aria-label="Filter by symbol" />
+      <select id="feed-status" class="feed-input" aria-label="Filter by status">
+        ${EVENT_STATUSES.map((s) => `<option value="${s}" ${eventFilter.status === s ? 'selected' : ''}>${s === 'all' ? 'Any status' : s}</option>`).join('')}
+      </select>
+      <select id="feed-sort" class="feed-input" aria-label="Sort events">
+        ${[['recent', 'Newest first'], ['score', 'Highest score'], ['evidence', 'Most evidence']]
+          .map(([v, l]) => `<option value="${v}" ${eventFilter.sort === v ? 'selected' : ''}>${l}</option>`)
+          .join('')}
+      </select>
+      <button class="btn small ghost" id="feed-clear" type="button">Clear</button>
+      <span class="muted" id="feed-count"></span>
+    </div>
+    <div id="event-list" class="event-list"></div>`;
 
-  view.addEventListener('click', async (e) => {
+  const paint = () => {
+    const q = eventFilter.search.trim().toLowerCase();
+    const sym = eventFilter.symbol.trim().toUpperCase();
+    let rows = all.filter((e) => {
+      if (eventFilter.status !== 'all' && e.status !== eventFilter.status) return false;
+      if (sym && !(e.symbols || []).some((s) => s.toUpperCase() === sym)) return false;
+      if (!q) return true;
+      const hay = [e.title, e.category, e.summary, ...(e.symbols || []), ...(e.evidence?.sources || [])]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    });
+    if (eventFilter.sort === 'score') rows = [...rows].sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+    else if (eventFilter.sort === 'evidence') rows = [...rows].sort((a, b) => (b.evidence?.articleCount || 0) - (a.evidence?.articleCount || 0));
+    else rows = [...rows].sort((a, b) => Date.parse(b.lastUpdatedTs) - Date.parse(a.lastUpdatedTs));
+
+    $('#event-list').innerHTML = rows.length
+      ? rows.map(eventCard).join('')
+      : '<div class="card"><p class="muted">No events match these filters.</p></div>';
+    $('#feed-count').textContent = `${rows.length} of ${all.length}`;
+  };
+
+  const syncFilter = () => {
+    eventFilter.search = $('#feed-search').value;
+    eventFilter.symbol = $('#feed-symbol').value;
+    eventFilter.status = $('#feed-status').value;
+    eventFilter.sort = $('#feed-sort').value;
+    paint();
+  };
+  for (const id of ['feed-search', 'feed-symbol', 'feed-status', 'feed-sort']) {
+    const node = document.getElementById(id);
+    node.addEventListener('input', syncFilter);
+    node.addEventListener('change', syncFilter);
+  }
+  $('#feed-clear').addEventListener('click', () => {
+    eventFilter = { search: '', status: 'all', sort: 'recent', symbol: '' };
+    viewEvents();
+  });
+
+  paint();
+
+  onViewClick(async (e) => {
     const act = e.target.closest('[data-act]')?.dataset.act;
     const id = e.target.closest('[data-id]')?.dataset.id;
     try {
@@ -295,10 +493,12 @@ function eventCard(e) {
         .join('')}</div>` : ''}
       ${(e.uncertain && e.uncertain.length) ? `<div class="uncertain">⚠ ${esc(e.uncertain.slice(0, 2).join(' '))}</div>` : ''}
       <div class="event-actions">
-        <button class="btn small" data-act="investigate" data-id="${e.id}">Investigate</button>
-        <button class="btn small ghost" data-act="status" data-id="${e.id}" data-status="saved">Save</button>
-        <button class="btn small ghost" data-act="status" data-id="${e.id}" data-status="acknowledged">Ack</button>
-        <button class="btn small ghost" data-act="status" data-id="${e.id}" data-status="dismissed">Dismiss</button>
+        ${isDemo()
+          ? '<span class="pill muted" title="Disabled in read-only demo mode">Investigate / Save / Ack / Dismiss are unavailable in demo mode</span>'
+          : `<button class="btn small" data-act="investigate" data-id="${e.id}">Investigate</button>
+             <button class="btn small ghost" data-act="status" data-id="${e.id}" data-status="saved">Save</button>
+             <button class="btn small ghost" data-act="status" data-id="${e.id}" data-status="acknowledged">Ack</button>
+             <button class="btn small ghost" data-act="status" data-id="${e.id}" data-status="dismissed">Dismiss</button>`}
         <a class="btn small ghost" href="#/event/${e.id}">Open</a>
       </div>
     </div>`;
@@ -318,6 +518,7 @@ async function viewEvent(id) {
   const bd = e.evidence?.components || null;
 
   view.innerHTML = `
+    ${demoBanner()}
     <div class="dash-head">
       <div>
         <a class="muted" href="#/events">← back to events</a>
@@ -341,7 +542,7 @@ async function viewEvent(id) {
       <div class="metric"><div class="k">Last updated</div><div class="v small">${dt(e.lastUpdatedTs)}</div><div class="d">${relTime(e.lastUpdatedTs)}</div></div>
     </div>
 
-    ${e.summary ? `<div class="card"><div class="sec-head"><h2>Summary <span class="pill">model-generated</span></h2></div><p>${esc(e.summary)}</p>
+    ${e.summary ? `<div class="card"><div class="sec-head"><h2>Summary <span class="pill">${e.model?.sample ? 'sample analysis — authored, not model output' : 'model-generated'}</span></h2></div><p>${esc(e.summary)}</p>
       ${e.model?.impact ? `<p class="muted">Impact read: <strong>${esc(e.model.impact.direction)}</strong> / ${esc(e.model.impact.magnitude)} — ${esc(e.model.impact.rationale || '')}</p>` : ''}
       ${e.model?.novelty ? `<p class="muted">Novelty: ${esc(e.model.novelty)}</p>` : ''}
     </div>` : '<div class="card"><p class="muted">Not investigated yet. Run <em>Investigate</em> to generate a summary.</p></div>'}
@@ -352,6 +553,11 @@ async function viewEvent(id) {
     ${(e.model?.contradictions?.length || e.uncertain?.length) ? `<div class="card"><div class="sec-head"><h2>Contradictions &amp; uncertainty</h2></div>
       ${e.model?.contradictions?.length ? `<ul class="contradictions">${e.model.contradictions.map((c) => `<li>⚠ ${esc(c)}</li>`).join('')}</ul>` : ''}
       ${e.uncertain?.length ? `<ul class="uncertain-list">${e.uncertain.map((u) => `<li>${esc(u)}</li>`).join('')}</ul>` : ''}</div>` : ''}
+
+    ${e.model?.follow_up_queries?.length ? `<div class="card">
+      <div class="sec-head"><h2>What to verify next</h2><span class="pill">suggested — not executed</span></div>
+      <ul class="claims">${e.model.follow_up_queries.map((q) => `<li>${esc(q)}</li>`).join('')}</ul>
+    </div>` : ''}
 
     <div class="card">
       <div class="sec-head"><h2>Market context</h2></div>
@@ -396,17 +602,19 @@ async function viewEvent(id) {
     <div class="card">
       <div class="sec-head"><h2>Actions</h2></div>
       <div class="event-actions">
-        <button class="btn" data-act="investigate" data-id="${e.id}">Re-investigate</button>
-        <button class="btn ghost" data-act="status" data-id="${e.id}" data-status="saved">Save</button>
-        <button class="btn ghost" data-act="status" data-id="${e.id}" data-status="acknowledged">Acknowledge</button>
-        <button class="btn ghost" data-act="status" data-id="${e.id}" data-status="dismissed">Dismiss</button>
-        <button class="btn ghost" data-act="followup" data-id="${e.id}">Follow-up searches</button>
+        ${isDemo()
+          ? '<span class="pill muted" title="Disabled in read-only demo mode">Investigating and triage actions are unavailable in demo mode.</span>'
+          : `<button class="btn" data-act="investigate" data-id="${e.id}">Re-investigate</button>
+             <button class="btn ghost" data-act="status" data-id="${e.id}" data-status="saved">Save</button>
+             <button class="btn ghost" data-act="status" data-id="${e.id}" data-status="acknowledged">Acknowledge</button>
+             <button class="btn ghost" data-act="status" data-id="${e.id}" data-status="dismissed">Dismiss</button>
+             <button class="btn ghost" data-act="followup" data-id="${e.id}">Follow-up searches</button>`}
       </div>
       <div id="followup" class="muted"></div>
       <p class="disclaimer">The system does not trade. Any action is a human decision.</p>
     </div>`;
 
-  view.addEventListener('click', async (ev) => {
+  onViewClick(async (ev) => {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     const eid = ev.target.closest('[data-id]')?.dataset.id;
@@ -438,10 +646,10 @@ async function viewEvent(id) {
 /* ------------------------------------------------------------------ */
 
 function num(id, v, step = 1) {
-  return `<input id="${id}" type="number" step="${step}" value="${v}" />`;
+  return `<input id="${id}" type="number" step="${step}" value="${v}" ${isDemo() ? 'disabled' : ''} />`;
 }
 function checkbox(id, v) {
-  return `<input id="${id}" type="checkbox" ${v ? 'checked' : ''} />`;
+  return `<input id="${id}" type="checkbox" ${v ? 'checked' : ''} ${isDemo() ? 'disabled' : ''} />`;
 }
 
 async function viewSettings() {
@@ -455,8 +663,9 @@ async function viewSettings() {
   const w = settings.scoring.weights;
 
   view.innerHTML = `
-    <div class="dash-head"><div><h2>Settings</h2><p class="muted">Persisted on the server</p></div>
-      <div class="actions"><button class="btn" id="save-settings">Save settings</button></div></div>
+    ${demoBanner()}
+    <div class="dash-head"><div><h2>Settings</h2><p class="muted">${isDemo() ? 'Read-only in demo mode — values shown for reference' : 'Persisted on the server'}</p></div>
+      <div class="actions">${isDemo() ? '<span class="pill muted">Read-only in demo mode</span>' : '<button class="btn" id="save-settings">Save settings</button>'}</div></div>
 
     <div class="settings-grid">
       <div class="card">
@@ -473,10 +682,10 @@ async function viewSettings() {
       <div class="card">
         <div class="sec-head"><h2>Providers &amp; budget</h2></div>
         <label class="field">Market provider
-          <select id="s-mkt-prov">${['auto', 'twelvedata', 'fixture'].map((p) => `<option ${settings.providers.market === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
+          <select id="s-mkt-prov" ${isDemo() ? 'disabled' : ''}>${['auto', 'twelvedata', 'fixture'].map((p) => `<option ${settings.providers.market === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
         </label>
         <label class="field">News provider
-          <select id="s-news-prov">${['auto', 'serpapi', 'fixture'].map((p) => `<option ${settings.providers.news === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
+          <select id="s-news-prov" ${isDemo() ? 'disabled' : ''}>${['auto', 'serpapi', 'fixture'].map((p) => `<option ${settings.providers.news === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
         </label>
         <label class="field">SerpApi monthly searches ${num('s-serp-mo', settings.budget.serpapiMonthlySearches)}</label>
         <label class="field">SerpApi reserve fraction ${num('s-serp-res', settings.budget.serpapiReserveFraction, 0.05)}</label>
@@ -491,7 +700,7 @@ async function viewSettings() {
         <label class="field">Sector queries ${checkbox('s-q-sec', settings.news.sectorQueries)}</label>
         <label class="field">Market query ${checkbox('s-q-mkt', settings.news.marketQuery)}</label>
         <label class="field">Category queries ${checkbox('s-q-cat', settings.news.categoryQueries)}</label>
-        <label class="field">Categories <input id="s-cats" value="${esc(settings.news.categories.join(', '))}" /></label>
+        <label class="field">Categories <input id="s-cats" value="${esc(settings.news.categories.join(', '))}" ${isDemo() ? 'disabled' : ''} /></label>
       </div>
 
       <div class="card">
@@ -508,14 +717,14 @@ async function viewSettings() {
 
     <div class="card">
       <div class="sec-head"><h2>Watchlist</h2><div class="actions">
-        <button class="btn small" id="seed-watch">Seed defaults</button></div></div>
+        <button class="btn small" id="seed-watch" ${unavailableAttr()}>Seed defaults</button></div></div>
       <div class="table-scroll"><table class="data">
         <thead><tr><th>Symbol</th><th>Name</th><th>Sector</th><th>Benchmark</th><th>Peers</th><th>Importance</th><th></th></tr></thead>
         <tbody>
           ${watchlist.map((x) => `<tr>
             <td><strong>${esc(x.symbol)}</strong></td><td>${esc(x.companyName || '')}</td><td>${esc(x.sector || '')}</td>
             <td>${esc(x.benchmarkSymbol || '—')}</td><td>${esc((x.peers || []).join(', '))}</td><td>${x.importance}</td>
-            <td><button class="btn small ghost" data-rm="${esc(x.symbol)}">remove</button></td>
+            <td><button class="btn small ghost" data-rm="${esc(x.symbol)}" ${unavailableAttr()}>remove</button></td>
           </tr>`).join('')}
         </tbody>
       </table></div>
@@ -525,7 +734,7 @@ async function viewSettings() {
         <input id="w-sector" placeholder="Sector" />
         <input id="w-bench" placeholder="Benchmark (e.g. SPY)" />
         <input id="w-peers" placeholder="Peers (comma)" />
-        <button class="btn" id="add-watch">Add</button>
+        <button class="btn" id="add-watch" ${unavailableAttr()}>Add</button>
       </div>
     </div>
 
@@ -548,7 +757,7 @@ async function viewSettings() {
       }, null, 2))}</pre>
     </div>`;
 
-  $('#save-settings').addEventListener('click', async () => {
+  $('#save-settings')?.addEventListener('click', async () => {
     const weights = {};
     for (const k of Object.keys(w)) weights[k] = Number($('#w-' + k).value);
     const patch = {
@@ -593,7 +802,7 @@ async function viewSettings() {
     }
   });
 
-  view.addEventListener('click', async (e) => {
+  onViewClick(async (e) => {
     if (e.target.id === 'add-watch') {
       try {
         await api('/api/watchlist', { method: 'PUT', body: {
@@ -626,6 +835,14 @@ async function viewSettings() {
 async function viewKeys() {
   renderNav('#/keys');
   const view = $('#view');
+  if (isDemo()) {
+    view.innerHTML = `${demoBanner()}
+      <div class="card"><div class="sec-head"><h2>API Keys</h2><span class="pill muted">demo</span></div>
+      <p class="muted">Key management is disabled in read-only demo mode — the demo runs on an ephemeral
+      database and never reads or shows your real credentials. In normal mode, provider keys are stored
+      encrypted on the server (AES-256-GCM) and are never returned to the browser.</p></div>`;
+    return;
+  }
   const [{ secrets }, status] = await Promise.all([api('/api/secrets'), api('/api/status')]);
 
   view.innerHTML = `
@@ -655,7 +872,7 @@ async function viewKeys() {
       </div>
     </div>`;
 
-  view.addEventListener('click', async (e) => {
+  onViewClick(async (e) => {
     const btn = e.target.closest('[data-key]');
     if (!btn) return;
     const name = btn.dataset.key;
@@ -702,7 +919,7 @@ async function viewReplay() {
     </div>
     <div id="replay-out"></div>`;
 
-  view.addEventListener('click', async (e) => {
+  onViewClick(async (e) => {
     const id = e.target.closest('[data-scenario]')?.dataset.scenario;
     if (!id) return;
     const out = $('#replay-out');
@@ -731,6 +948,10 @@ async function viewReplay() {
 /* ------------------------------------------------------------------ */
 
 async function route() {
+  if (!session.authenticated) {
+    renderLogin();
+    return;
+  }
   const hash = location.hash || '#/radar';
   try {
     if (hash.startsWith('#/event/')) return await viewEvent(hash.split('/')[2]);
@@ -740,13 +961,22 @@ async function route() {
     if (hash === '#/replay') return await viewReplay();
     return await viewRadar();
   } catch (err) {
+    if (err.code === 401) {
+      session.authenticated = false;
+      return renderLogin('Your session expired. Please sign in again.');
+    }
     $('#view').innerHTML = `<div class="alert">${esc(err.message)}</div>`;
   }
 }
 
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => {
+  if (session.authenticated) route();
+});
 window.addEventListener('DOMContentLoaded', async () => {
-  renderStatusBar();
+  await refreshSession();
+  await renderStatusBar();
   await route();
-  setInterval(renderStatusBar, 30000);
+  setInterval(() => {
+    if (session.authenticated) renderStatusBar();
+  }, 30000);
 });

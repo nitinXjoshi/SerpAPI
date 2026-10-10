@@ -7,10 +7,15 @@ import {
   validateSecret,
   getSecretMeta,
 } from '../secrets.js';
+import { createConcurrencyGuard } from '../security/rateLimit.js';
+import { asyncHandler } from '../security/errors.js';
+import { asString } from '../security/validate.js';
 
 const router = Router();
+// Validation performs an outbound call to the provider — serialise it.
+const validateGuard = createConcurrencyGuard(1, 'A key validation is already running.');
 
-function known(req, res) {
+function requireKnownSecret(req, res) {
   const { name } = req.params;
   if (!KNOWN_SECRETS[name]) {
     res.status(400).json({ error: 'Unknown secret.' });
@@ -24,27 +29,37 @@ router.get('/', (_req, res) => {
 });
 
 // Store + validate. The value is never echoed back.
-router.put('/:name', async (req, res) => {
-  const name = known(req, res);
-  if (!name) return;
-  try {
-    putSecret(name, req.body?.value);
-  } catch (err) {
-    return res.status(400).json({ error: err.message });
-  }
-  const validation = await validateSecret(name);
-  res.json({ secret: getSecretMeta(name), validation });
-});
+router.put(
+  '/:name',
+  validateGuard,
+  asyncHandler(async (req, res) => {
+    const name = requireKnownSecret(req, res);
+    if (!name) return;
+    let value;
+    try {
+      value = asString(String(req.body?.value ?? ''), { field: 'value', min: 1, max: 512, trim: true });
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    putSecret(name, value);
+    const validation = await validateSecret(name);
+    res.json({ secret: getSecretMeta(name), validation });
+  }),
+);
 
-router.post('/:name/validate', async (req, res) => {
-  const name = known(req, res);
-  if (!name) return;
-  const validation = await validateSecret(name);
-  res.json({ secret: getSecretMeta(name), validation });
-});
+router.post(
+  '/:name/validate',
+  validateGuard,
+  asyncHandler(async (req, res) => {
+    const name = requireKnownSecret(req, res);
+    if (!name) return;
+    const validation = await validateSecret(name);
+    res.json({ secret: getSecretMeta(name), validation });
+  }),
+);
 
 router.delete('/:name', (req, res) => {
-  const name = known(req, res);
+  const name = requireKnownSecret(req, res);
   if (!name) return;
   deleteSecret(name);
   res.json({ ok: true, secret: getSecretMeta(name) });

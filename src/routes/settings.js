@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { getSettings, saveSettings } from '../db.js';
+import { getSettings, saveSettings, deepMerge } from '../db.js';
 import { kickSchedulers } from '../scheduler.js';
+import { validateSettingsPatch, assertThresholdOrder } from '../security/validate.js';
 
 const router = Router();
 
@@ -9,12 +10,15 @@ router.get('/', (_req, res) => {
 });
 
 router.put('/', (req, res) => {
-  const patch = req.body?.settings ?? req.body ?? {};
-  if (typeof patch !== 'object' || patch === null) {
-    return res.status(400).json({ error: 'Expected an object of settings.' });
-  }
+  const raw = req.body?.settings ?? req.body ?? {};
+  const clean = validateSettingsPatch(raw);
+
+  // Validate the merged result *before* persisting so invalid combos are rejected.
+  const merged = deepMerge(getSettings(), clean);
+  assertThresholdOrder(merged);
+
   const before = getSettings();
-  const settings = saveSettings(patch);
+  const settings = saveSettings(clean);
   if (!before.monitoring.enabled && settings.monitoring.enabled) {
     kickSchedulers();
   }
