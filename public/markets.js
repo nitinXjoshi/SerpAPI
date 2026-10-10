@@ -102,6 +102,7 @@ function renderChrome(active) {
     mode === 'hackathon' ? '<span class="pill warn" title="No sign-in; loopback only">hackathon · no login</span>'
     : mode === 'demo' ? '<span class="pill warn" title="Read-only synthetic fixtures">demo · read-only</span>'
     : mode === 'disabled' ? '<span class="pill warn">auth disabled</span>'
+    : !state.session.authenticated ? '<a class="pill warn" href="/dashboard.html" title="Sign in to manage keys and settings">not signed in · sign in</a>'
     : '<span class="pill ok">signed in</span>';
   $('#topbar-right').innerHTML = `
     ${modePill}
@@ -955,6 +956,17 @@ async function viewSettings() {
   ]);
   const s = settings.settings || {};
   const demo = isDemo();
+  const signedIn = Boolean(state.session.authenticated);
+  const canManage = signedIn && !demo;
+  // Always render a place to enter provider keys, even when the authenticated endpoint
+  // can't list them (signed out) or the mode is read-only (demo) — otherwise the fields
+  // silently disappear and there is nowhere to paste a key.
+  const keyList = secrets.secrets && secrets.secrets.length
+    ? secrets.secrets
+    : [
+        { name: 'serpapi_api_key', label: 'SerpAPI private key', configured: false },
+        { name: 'twelvedata_api_key', label: 'Twelve Data API key', configured: false },
+      ];
 
   view.innerHTML = `
     <div class="page-head"><div><h1>Settings</h1><p>Provider credentials, polling, and appearance. Keys are encrypted on the server and never returned to the browser.</p></div></div>
@@ -962,16 +974,17 @@ async function viewSettings() {
     <div class="card">
       <h2 style="margin:0 0 12px;font-size:16px">API keys</h2>
       ${demo ? '<div class="banner warn">Demo mode is read-only — key management is disabled.</div>' : ''}
+      ${!signedIn ? '<div class="banner warn">You are not signed in. <a href="/dashboard.html">Sign in</a> to save or change provider keys.</div>' : ''}
       <div class="form-grid">
-        ${(secrets.secrets || []).map((k) => `
+        ${keyList.map((k) => `
           <div>
             <div class="field">
               <label>${esc(k.label)}</label>
               <div class="key-row">
-                <input type="password" id="key-${esc(k.name)}" placeholder="${k.configured ? 'stored — enter a new value to replace' : 'paste your key'}" ${demo ? 'disabled' : ''} />
-                <button class="btn small" data-save="${esc(k.name)}" ${demo ? 'disabled' : ''}>Save</button>
-                <button class="btn ghost small" data-validate="${esc(k.name)}" ${demo ? 'disabled' : ''}>Validate</button>
-                <button class="btn ghost small" data-delete="${esc(k.name)}" ${demo ? 'disabled' : ''}>Delete</button>
+                <input type="password" id="key-${esc(k.name)}" placeholder="${canManage ? (k.configured ? 'stored — enter a new value to replace' : 'paste your key') : demo ? 'read-only demo' : 'sign in to manage keys'}" ${canManage ? '' : 'disabled'} />
+                <button class="btn small" data-save="${esc(k.name)}" ${canManage ? '' : 'disabled'}>Save</button>
+                <button class="btn ghost small" data-validate="${esc(k.name)}" ${canManage ? '' : 'disabled'}>Validate</button>
+                <button class="btn ghost small" data-delete="${esc(k.name)}" ${canManage ? '' : 'disabled'}>Delete</button>
               </div>
               <div class="faint" style="font-size:11.5px">${k.configured ? `stored · last 4 ${esc(k.last4 || '')} · status ${esc(k.status || 'unknown')} · validated ${esc(rel(k.lastValidatedAt))}` : 'not configured'}</div>
             </div>
@@ -1053,6 +1066,7 @@ async function viewSettings() {
   });
 
   onViewClick(async (e) => {
+    if (!canManage) return;
     const save = e.target.closest('[data-save]');
     const val = e.target.closest('[data-validate]');
     const del = e.target.closest('[data-delete]');
