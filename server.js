@@ -9,6 +9,19 @@ import { initDb, closeDb } from './src/db.js';
 import { callSerpApi, resolveSerpApiKey } from './src/serpapi.js';
 import { listWatchlist, defaultWatchlist, upsertWatchlist } from './src/watchlist.js';
 import { startScheduler, stopScheduler } from './src/scheduler.js';
+
+import { securityHeaders } from './src/security/headers.js';
+import { createRateLimiter } from './src/security/rateLimit.js';
+import {
+  asyncHandler,
+  sanitizeUpstream,
+  upstreamErrorMessage,
+} from './src/security/errors.js';
+import { initAuth, stopAuth, requireAuth, sameOriginGuard } from './src/security/auth.js';
+import { asString, asEnum } from './src/security/validate.js';
+import { seedDemoData } from './src/demo/seed.js';
+
+import authRouter from './src/routes/auth.js';
 import secretsRouter from './src/routes/secrets.js';
 import settingsRouter from './src/routes/settings.js';
 import watchlistRouter from './src/routes/watchlist.js';
@@ -21,19 +34,33 @@ import replayRouter from './src/routes/replay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const VALID_WINDOWS = new Set(['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'MAX']);
+const VALID_WINDOWS = ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'MAX'];
 
 app.disable('x-powered-by');
-app.use(express.json({ limit: '2mb' }));
+if (config.trustProxy) app.set('trust proxy', 1);
+
+app.use(securityHeaders());
+app.use(express.json({ limit: '256kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 /* ------------------------------------------------------------------ */
-/* Explorer endpoints (existing behaviour preserved)                   */
+/* Authentication                                                      */
 /* ------------------------------------------------------------------ */
 
-function pickExplorerKey(body) {
-  return (typeof body?.apiKey === 'string' && body.apiKey.trim()) || resolveSerpApiKey();
-}
+// Public auth endpoints (login must be reachable before a session exists).
+app.use('/api/auth', authRouter);
+
+// Baseline throttle for the whole API, then re-assert same-origin for state changes,
+// then require an authenticated session for everything else under /api.
+const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
+const expensive = createRateLimiter({ windowMs: 60_000, max: 60, message: 'Too many requests for this operation.' });
+const heavy = createRateLimiter({ windowMs: 60_000, max: 20, message: 'Too many requests for this operation.' });
+
+app.use('/api', apiLimiter, sameOriginGuard, requireAuth);
+
+/* ------------------------------------------------------------------ */
+/* Explorer endpoints (server-side key only; no client-supplied keys)  */
+/* ------------------------------------------------------------------ */
 
 function normalizeSuggestions(data) {
   const out = [];
@@ -72,99 +99,167 @@ function normalizeSuggestions(data) {
 }
 
 app.get('/api/config', (_req, res) => {
-  res.json({ hasServerKey: Boolean(resolveSerpApiKey()) });
+  res.json({
+    hasServerKey: Boolean(resolveSerpApiKey()),
+    demoMode: config.demoMode,
+  });
 });
 
-app.post('/api/search', async (req, res) => {
-  const body = req.body || {};
-  const query = typeof body.q === 'string' ? body.q.trim() : '';
-  const windowParam =
-    typeof body.window === 'string' && VALID_WINDOWS.has(body.window) ? body.window : null;
-  const apiKey = pickExplorerKey(body);
+app.post(
+  '/api/search',
+  expensive,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const query = asString(String(body.q ?? ''), { field: 'q', min: 1, max: 120 });
+    const windowParam = body.window === undefined ? null : asEnum(body.window, VALID_WINDOWS, { field: 'window' });
 
-  if (!query) {
-    return res.status(400).json({ error: 'Enter a stock name, ticker, or symbol (e.g. AAPL:NASDAQ).' });
-  }
-  if (!apiKey) {
-    return res.status(400).json({
-      error:
-        'No SerpAPI key found. Add SERPAPI_API_KEY to your .env file or paste a key in the Settings panel.',
-    });
-  }
-  const params = { hl: 'en' };
-  if (windowParam) params.window = windowParam;
-  const { status, data } = await callSerpApi('google_finance', query, params, apiKey);
-  return res.status(status).json(data);
-});
+    const apiKey = resolveSerpApiKey();
+    if (!apiKey) {
+      return res.status(503).json({ error: 'No SerpAPI key configured. Add one in the dashboard API Keys page.' });
+    }
+    const params = { hl: 'en' };
+    if (windowParam) params.window = windowParam;
+    const { status, data } = await callSerpApi('google_finance', query, params, apiKey);
+    if (status !== 200 || data?.error) {
+      return res.status(status === 200 ? 502 : status).json({ error: upstreamErrorMessage(status) });
+    }
+    res.json(sanitizeUpstream(data));
+  }),
+);
 
-app.post('/api/suggest', async (req, res) => {
-  const body = req.body || {};
-  const query = typeof body.q === 'string' ? body.q.trim() : '';
-  const apiKey = pickExplorerKey(body);
-  if (query.length < 2) return res.json({ recommendations: [], cached: false });
-  if (!apiKey) return res.status(400).json({ error: 'No SerpAPI key configured.' });
+app.post(
+  '/api/suggest',
+  expensive,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const query = asString(String(body.q ?? ''), { field: 'q', min: 1, max: 120 });
+    if (query.length < 2) return res.json({ recommendations: [], cached: false });
 
-  const { status, data } = await callSerpApi('google_finance', query, { hl: 'en' }, apiKey);
-  if (status === 401 || status === 403) return res.status(status).json(data);
-  return res.json({ recommendations: normalizeSuggestions(data), cached: Boolean(data._cached) });
-});
+    const apiKey = resolveSerpApiKey();
+    if (!apiKey) return res.status(503).json({ error: 'No SerpAPI key configured.' });
 
-app.post('/api/news', async (req, res) => {
-  const body = req.body || {};
-  const query = typeof body.q === 'string' ? body.q.trim() : '';
-  const apiKey = pickExplorerKey(body);
-  if (!query) return res.json({ news_results: [] });
-  if (!apiKey) return res.status(400).json({ error: 'No SerpAPI key configured.' });
+    const { status, data } = await callSerpApi('google_finance', query, { hl: 'en' }, apiKey);
+    if (status === 401 || status === 403) return res.status(status).json({ error: upstreamErrorMessage(status) });
+    if (status !== 200 || data?.error) return res.json({ recommendations: [], cached: false });
+    res.json({ recommendations: normalizeSuggestions(data), cached: Boolean(data._cached) });
+  }),
+);
 
-  const { status, data } = await callSerpApi('google_news', query, { gl: 'us', hl: 'en', so: '1' }, apiKey);
-  return res.status(status).json(data);
-});
+app.post(
+  '/api/news',
+  expensive,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const query = asString(String(body.q ?? ''), { field: 'q', min: 1, max: 120 });
+
+    const apiKey = resolveSerpApiKey();
+    if (!apiKey) return res.status(503).json({ error: 'No SerpAPI key configured.' });
+
+    const { status, data } = await callSerpApi('google_news', query, { gl: 'us', hl: 'en', so: '1' }, apiKey);
+    if (status !== 200 || data?.error) {
+      return res.status(status === 200 ? 502 : status).json({ error: upstreamErrorMessage(status) });
+    }
+    res.json({ news_results: data.news_results || [] });
+  }),
+);
 
 /* ------------------------------------------------------------------ */
-/* Intelligence platform routes                                        */
+/* Intelligence platform routes (authenticated)                        */
 /* ------------------------------------------------------------------ */
 
-app.use('/api/secrets', secretsRouter);
+app.use('/api/secrets', heavy, secretsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/watchlist', watchlistRouter);
-app.use('/api/market', marketRouter);
-app.use('/api/news', newsRouter);
+app.use('/api/market', heavy, marketRouter);
+app.use('/api/news', heavy, newsRouter);
 app.use('/api/events', eventsRouter);
-app.use('/api/ollama', ollamaRouter);
-app.use('/api/replay', replayRouter);
+app.use('/api/ollama', heavy, ollamaRouter);
+app.use('/api/replay', heavy, replayRouter);
 app.use('/api/status', statusRouter);
 
+/* ------------------------------------------------------------------ */
+/* Errors                                                              */
+/* ------------------------------------------------------------------ */
+
 app.use((err, _req, res, _next) => {
-  logger.error('http.unhandled', { error: err?.message });
-  res.status(500).json({ error: 'Internal server error.' });
+  // Body-parser errors can echo request fragments — never surface them.
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    return res.status(400).json({ error: 'Invalid JSON body.' });
+  }
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request body too large.' });
+  }
+  if (err?.name === 'ValidationError') {
+    return res.status(400).json({ error: err.message, ...(err.field ? { field: err.field } : {}) });
+  }
+  const status = Number.isInteger(err?.status) ? err.status : 500;
+  if (status >= 500) {
+    logger.error('http.unhandled', { error: err });
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+  logger.warn('http.error', { status, error: err });
+  res.status(status).json({ error: 'Request failed.' });
 });
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
 /* ------------------------------------------------------------------ */
 
-function boot() {
-  initDb();
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+
+async function boot() {
+  // Demo mode must never be exposed off-host.
+  if (config.demoMode && !LOOPBACK_HOSTS.has(config.host)) {
+    console.error(`\n  Refusing to start: judge demo is loopback-only (HOST=${config.host}).`);
+    console.error('  Unset HOST or use HOST=127.0.0.1.\n');
+    process.exit(1);
+  }
+
+  // Demo runs on an ephemeral in-memory database so it can never touch, expose, or
+  // mutate the operator's real data or stored provider keys.
+  initDb({ dbPath: config.demoMode ? ':memory:' : config.dbPath });
+
   if (listWatchlist().length === 0) {
     for (const e of defaultWatchlist()) upsertWatchlist(e);
     logger.info('watchlist.seeded.defaults');
   }
 
-  const server = app.listen(config.port, () => {
-    logger.info('server.listening', { port: config.port });
-    console.log(`\n  SerpAPI Intelligence  ->  http://localhost:${config.port}`);
-    console.log(`  Explorer:   http://localhost:${config.port}/`);
-    console.log(`  Dashboard:  http://localhost:${config.port}/dashboard.html\n`);
-    console.log(
-      resolveSerpApiKey()
-        ? '  SerpAPI key: configured'
-        : '  SerpAPI key: not configured (enter it in the dashboard Keys page)',
-    );
-    startScheduler();
+  if (config.demoMode) {
+    const summary = await seedDemoData();
+    logger.info('demo.ready', summary);
+  } else {
+    initAuth();
+  }
+
+  const server = app.listen(config.port, config.host, () => {
+    logger.info('server.listening', { host: config.host, port: config.port, demo: config.demoMode });
+    const base = `http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${config.port}`;
+    console.log(`\n  InfoMark  ->  ${base}`);
+    console.log(`  Dashboard:  ${base}/dashboard.html`);
+    console.log(`  Explorer:   ${base}/`);
+    if (config.demoMode) {
+      console.log('  Mode:       DEMO (read-only) — fixture data, no provider or Ollama calls');
+      console.log('  Login:      not required in demo mode');
+    } else {
+      console.log(
+        `  Auth:       ${config.auth.disabled ? 'DISABLED (insecure local mode)' : 'required (log in with your admin credentials)'}`,
+      );
+      console.log(
+        resolveSerpApiKey()
+          ? '  SerpAPI key: configured'
+          : '  SerpAPI key: not configured (add it in the dashboard API Keys page)',
+      );
+    }
+    if (config.host === '0.0.0.0') {
+      console.log('  ⚠  HOST=0.0.0.0 — the dashboard is reachable from other machines on your network.');
+    }
+    console.log('');
+    if (!config.demoMode) startScheduler();
   });
 
   const shutdown = () => {
     stopScheduler();
+    stopAuth();
     server.close(() => {
       closeDb();
       process.exit(0);
@@ -174,4 +269,4 @@ function boot() {
   process.on('SIGTERM', shutdown);
 }
 
-boot();
+await boot();

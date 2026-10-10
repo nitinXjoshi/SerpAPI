@@ -15,7 +15,6 @@ const state = {
   rangeData: null, // windowed { summary, graph, key_events }
   currentQuery: '',
   hasServerKey: false,
-  key: localStorage.getItem('serpapi_key') || '',
   chart: null,
   newsToken: 0,
 };
@@ -30,8 +29,6 @@ const el = {
   emptyKeyNote: $('#empty-key-note'),
   view: $('#view'),
   nav: $('#section-nav'),
-  apiKey: $('#api-key'),
-  keyHint: $('#key-hint'),
   suggestions: $('#suggestions'),
   directory: $('#sec-directory'),
 };
@@ -174,7 +171,7 @@ async function apiSearch(query, range) {
   const res = await fetch('/api/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: query, window: range || undefined, apiKey: state.key || undefined }),
+    body: JSON.stringify({ q: query, window: range || undefined }),
   });
   let data;
   try {
@@ -192,7 +189,7 @@ async function apiSuggest(query, signal) {
   const res = await fetch('/api/suggest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: query, apiKey: state.key || undefined }),
+    body: JSON.stringify({ q: query }),
     signal,
   });
   if (!res.ok) {
@@ -211,7 +208,7 @@ async function apiNews(query) {
   const res = await fetch('/api/news', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: query, apiKey: state.key || undefined }),
+    body: JSON.stringify({ q: query }),
   });
   let data;
   try {
@@ -1140,8 +1137,8 @@ async function loadSuggestions(q) {
     renderSuggestions(suggest.cache.get(cacheKey), q);
     return;
   }
-  if (!state.hasServerKey && !state.key) {
-    renderSuggestionNote('Add a SerpAPI key in Settings to get recommendations while typing.');
+  if (!state.hasServerKey) {
+    renderSuggestionNote('No SerpAPI key configured — add one in the Intelligence Dashboard → API Keys.');
     return;
   }
 
@@ -1328,22 +1325,6 @@ function renderDirectoryPrices() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Settings / key                                                      */
-/* ------------------------------------------------------------------ */
-
-function refreshKeyHint() {
-  if (state.hasServerKey) {
-    el.keyHint.textContent =
-      'A key from .env is active. Anything you paste here overrides it and is only stored in this browser.';
-  } else if (state.key) {
-    el.keyHint.textContent = 'Using the key saved in this browser.';
-  } else {
-    el.keyHint.textContent =
-      'No key configured. Add SERPAPI_API_KEY to .env, or paste your private key here (stored only in this browser via localStorage).';
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /* Init                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1360,20 +1341,47 @@ function bindGlobalClicks() {
 }
 
 async function init() {
-  el.apiKey.value = state.key;
-  refreshKeyHint();
+  // The explorer shares the dashboard's authenticated session. Provider keys are
+  // managed server-side (dashboard → API Keys); the browser never handles them.
+  try {
+    const session = await fetch('/api/auth/session').then((r) => r.json());
+    if (!session.authenticated) {
+      window.location.replace('/dashboard.html');
+      return;
+    }
+  } catch {
+    /* fall through — request handlers will surface any error */
+  }
 
   try {
     const cfg = await fetch('/api/config').then((r) => r.json());
     state.hasServerKey = Boolean(cfg.hasServerKey);
-    refreshKeyHint();
+    if (cfg.demoMode) {
+      // The Explorer needs live SerpAPI access; in read-only demo mode it is disabled.
+      const main = document.querySelector('main.layout');
+      const banner = document.createElement('div');
+      banner.className = 'demo-banner';
+      banner.setAttribute('role', 'status');
+      banner.textContent =
+        'DEMO MODE — live company lookups are disabled (no provider keys, zero paid calls). ' +
+        'Open the Intelligence Dashboard for the guided demo.';
+      if (main && main.parentNode) main.parentNode.insertBefore(banner, main);
+      document.querySelectorAll('#search-form input, #search-form button').forEach((n) => {
+        n.disabled = true;
+      });
+      el.emptyKeyNote.textContent = '';
+      bindGlobalClicks();
+      renderDirectory();
+      buildNav();
+      return;
+    }
   } catch {
     /* server config optional */
   }
 
   if (!state.hasServerKey) {
     el.emptyKeyNote.textContent =
-      'Tip: open Settings (top right) and paste your SerpAPI key, or add it to .env.';
+      'No SerpAPI key configured. Add one in the Intelligence Dashboard → API Keys.';
   }
 
   el.form.addEventListener('submit', (e) => {
@@ -1384,13 +1392,6 @@ async function init() {
   el.query.addEventListener('input', onQueryInput);
   el.query.addEventListener('keydown', onQueryKeydown);
   el.query.addEventListener('focus', onQueryInput);
-
-  el.apiKey.addEventListener('input', () => {
-    state.key = el.apiKey.value.trim();
-    if (state.key) localStorage.setItem('serpapi_key', state.key);
-    else localStorage.removeItem('serpapi_key');
-    refreshKeyHint();
-  });
 
   bindGlobalClicks();
 

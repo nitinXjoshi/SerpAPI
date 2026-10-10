@@ -15,6 +15,101 @@ viewer) at `/`. Both share the same Express server and styling.
 
 ---
 
+## Judge demo — start here
+
+```bash
+npm ci            # or: npm install
+npm run demo
+# open http://127.0.0.1:3000/dashboard.html
+```
+
+That is the whole setup. The demo opens **straight into the dashboard — no login screen** — and runs
+entirely on deterministic **fixture data**:
+
+- **Zero** SerpApi, Twelve Data or Ollama requests. Your provider keys and your database are never
+  read, used or modified — the demo runs on an ephemeral in-memory database.
+- No API keys, no `.env`, no database setup, and no Ollama installation required.
+- **Loopback-only** (`127.0.0.1`); it refuses to start with a public `HOST`.
+- **Read-only**: writes, settings changes, key management and provider-triggering actions are
+  disabled and visibly marked, so a judge cannot spend quota or change anything.
+- Every screen is labelled: a **DEMO MODE** banner plus `DEMO · read-only` and `fixture data` chips,
+  so simulated data is never mistaken for live data.
+
+Presenter script: [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md).
+
+## The problem
+
+A company-specific event moves a stock before anyone has time to read the coverage, verify it,
+compare related assets, and decide. Doing that across a whole watchlist by hand does not scale.
+InfoMark closes the loop: **detect the anomaly → gather and group the evidence → explain it → rank
+it — or say there is not enough evidence.**
+
+## What makes InfoMark different from a news summarizer
+
+- **It starts from the market, not the headline.** An anomaly (a stock's divergence from its
+  benchmark and peers) triggers the investigation rather than summarising everything.
+- **Evidence is grouped, not listed.** Duplicate and syndicated copies collapse into one event, and
+  independent corroboration is counted from distinct content hashes — repeated copies of one report
+  never inflate confidence.
+- **The score is arithmetic, not vibes.** Price anomaly, relative divergence, novelty, source
+  strength, cross-asset confirmation and freshness are combined by deterministic code with published
+  weights; the LLM never invents the number.
+- **It is allowed to say no.** Events can end as `insufficient_evidence` or `no_trade`.
+- **It is honest about provenance.** Source publication times, retrieval times and market
+  observation times are kept separate; `sample`, `reported`, `analytical` and `model-generated`
+  content are labelled distinctly.
+
+## Demo (fixture) mode vs live mode
+
+| | `npm run demo` (judge demo) | `npm start` (live) |
+| --- | --- | --- |
+| Login | none (read-only demo principal) | required (admin credentials) |
+| Data | deterministic fixtures | live SerpApi / Twelve Data |
+| Database | ephemeral in-memory | `data/intel.db` |
+| Ollama | never contacted | used for investigations |
+| Provider calls | **zero** | subject to your quotas |
+| Writes | disabled (read-only) | enabled for an authenticated admin |
+| Binding | loopback-only enforced | `127.0.0.1` by default |
+
+`DEMO_MODE=true` is what enables the demo; it is never on by default and never changes behaviour in
+normal mode.
+
+---
+
+## Security &amp; authentication (read this first)
+
+This app exposes administrative APIs and holds your provider keys, so it **requires
+authentication** and binds to **localhost only** by default.
+
+**Signing in.** Open `http://localhost:3000/dashboard.html` and log in:
+
+- Set `ADMIN_USERNAME` + `ADMIN_PASSWORD`, or a single `ADMIN_TOKEN`, in `.env` — recommended and
+  persistent. The login screen adapts to whichever is configured.
+- If neither is set, the server generates a **one-time token at startup** and prints it to the
+  **server console** (never to the browser). It rotates on every restart, so set env credentials to
+  keep it stable.
+
+**Sessions & transport.** Sessions use an **HttpOnly, `SameSite=Strict`** cookie (Secure when served
+over HTTPS) held in memory and lost on restart. State-changing requests are additionally
+same-origin checked. Login, search, news, polling, validation, investigation and replay endpoints
+are rate-limited, and expensive operations are serialised. Security headers (CSP, `nosniff`,
+`Referrer-Policy`, frame protection, HSTS over HTTPS) are applied to every response. The Explorer
+shares the session and redirects to the login screen when signed out.
+
+**Where keys live.** Provider keys are stored **encrypted on the server** (AES-256-GCM) and are
+never returned to the browser — the UI shows only a masked value and the last 4 characters. The
+browser never submits provider keys; all provider calls happen server-side. Keys and the encryption
+key are never logged.
+
+**Insecure local mode.** `AUTH_DISABLED=true` disables authentication entirely. It is never enabled
+by default, must be set explicitly, and is only safe on a trusted local machine.
+
+**Do not expose this to the internet.** Setting `HOST=0.0.0.0` exposes an administrative tool and
+your locally stored keys. The local **Ollama** service (`http://localhost:11434`) is assumed trusted
+and local-only and must never be exposed. See [`SECURITY.md`](./SECURITY.md) and §13.
+
+---
+
 ## 1. What it does
 
 ```
@@ -72,18 +167,29 @@ Open **http://localhost:3000/dashboard.html** for the intelligence dashboard, an
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP port |
+| `HOST` | `127.0.0.1` | Bind address. Loopback by default; `0.0.0.0` exposes it to the network (not recommended). |
 | `DATA_DIR` | `./data` | SQLite DB + encryption keyfile location (gitignored) |
 | `DB_PATH` | `$DATA_DIR/intel.db` | Override the database path |
-| `APP_ENCRYPTION_KEY` | generated keyfile | 32-byte key for secret encryption (see §7) |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama base URL |
+| `APP_ENCRYPTION_KEY` | generated keyfile | 32-byte key (64 hex or base64) for secret encryption; validated, fails safe if invalid (see §7) |
+| `ADMIN_USERNAME` | `admin` | Login username (used with `ADMIN_PASSWORD`) |
+| `ADMIN_PASSWORD` | — | Admin password. If unset, a one-time console token is used instead. |
+| `ADMIN_TOKEN` | — | Admin token alternative to a password |
+| `AUTH_DISABLED` | `false` | **Insecure.** Disables authentication (local trusted use only) |
+| `SESSION_TTL_MINUTES` | `480` | Session lifetime |
+| `AUTH_MAX_ATTEMPTS` | `10` | Failed logins allowed per IP per window |
+| `AUTH_WINDOW_MINUTES` | `15` | Login rate-limit window |
+| `TRUST_PROXY` | `false` | Set when behind a reverse proxy (affects `req.ip` / `Secure` detection) |
+| `CSP_ENABLED` | `true` | Emit the Content-Security-Policy header |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama base URL (local only) |
 | `OLLAMA_MODEL` | auto-discovered | Preferred Ollama model |
 | `OLLAMA_TIMEOUT_MS` | `60000` | Inference timeout |
 | `DEMO_MODE` | `false` | Force fixture providers (no external calls) |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `SERPAPI_API_KEY` | — | Optional; also settable in the dashboard (preferred) |
-| `TWELVEDATA_API_KEY` | — | Optional; also settable in the dashboard (preferred) |
+| `SERPAPI_API_KEY` | — | Optional; the dashboard **API Keys** page is preferred |
+| `TWELVEDATA_API_KEY` | — | Optional; the dashboard **API Keys** page is preferred |
 
 Keys entered in the dashboard are stored encrypted on the server and never returned to the browser.
+`ADMIN_*` credentials are read from the environment only and are never stored in the database.
 
 ---
 
@@ -249,17 +355,23 @@ investigation never stops the pipeline.
 
 ---
 
-## 12. Tests
+## 12. Tests and checks
 
 ```bash
-npm test        # node --test tests/*.test.js
+npm test          # node --test tests/*.test.js  (no paid services, no Ollama needed)
+npm run check     # syntax + credential scan + gitignore/tracking assertions
+npm run audit     # npm audit --audit-level=moderate
+npm run verify    # npm run check && npm test
 ```
 
-Fixtures and mocks only — **no paid API calls**. Covers market provider parsing, quota accounting,
-timestamp normalization, incremental `when:` queries, duplicate-URL detection, event clustering,
-independent-source counting, Ollama output validation, contradictory-evidence gating,
-relative-movement and opportunity-score math, stale/missing data, rate limits and failures, secrets
-masking, scheduler lock/overlap prevention, notification dedup, and no-look-ahead replay.
+Everything runs on fixtures and mocks — **no paid API calls and no running Ollama**. Coverage
+includes: market provider parsing, quota accounting, timestamp normalization, incremental `when:`
+queries, duplicate-URL detection, event clustering, independent-source counting, Ollama output
+validation, contradictory-evidence gating, relative-movement and opportunity-score math,
+stale/missing data, rate limits and failures, secret masking/redaction/encryption, scheduler
+lock/overlap prevention, notification dedup, no-look-ahead replay, the authenticated HTTP boundary,
+and the **demo-mode read-only boundary** (including a test asserting the demo seed performs
+**zero** outbound requests).
 
 ---
 
@@ -273,10 +385,13 @@ masking, scheduler lock/overlap prevention, notification dedup, and no-look-ahea
   Free Twelve Data data may be delayed; every observation shows its source timestamp and a
   stale/fresh badge.
 - **Execution cost is not modelled** (weight present, value 0) — no reliable spread/liquidity source.
+- **The demo's event analysis is authored, not model output.** In fixture-only demo mode no Ollama
+  request is made, so investigations come from hand-written samples (labelled "sample analysis").
+  Live mode replaces them with real Ollama output.
 - **Ollama is local.** A cloud deployment cannot reach `localhost:11434`. Keep the dashboard local;
   do not expose your machine to the public internet.
-- **Replay uses labelled synthetic fixtures** for demonstration. It distinguishes clearly what was
-  known at each timestamp and never uses post-decision data — but it is not a profitability backtest.
+- **Replay uses labelled synthetic fixtures.** It never uses post-decision data — but it is not a
+  profitability backtest.
 - **No deployment is performed** by this project; no hosting platform is configured.
 
 ---
@@ -284,12 +399,50 @@ masking, scheduler lock/overlap prevention, notification dedup, and no-look-ahea
 ## 14. Commands
 
 ```bash
-npm start                 # run the server
-npm run dev               # run with --watch
+npm run demo              # judge demo: no login, fixtures, zero provider calls (loopback only)
+npm start                 # normal mode (authenticated)
+npm run dev               # normal mode with --watch
 npm test                  # unit/integration tests (no paid calls)
+npm run check             # security/health checks (syntax + secret scan + ignore assertions)
+npm run audit             # dependency vulnerability report
+npm run verify            # check + tests
 ```
 
-## 15. Source
+## 15. Implemented vs planned
+
+**Implemented and exercised end-to-end (fixture-backed):**
+
+- Market radar with benchmark/peer-relative divergence, freshness and anomaly flags.
+- Scheduled SerpApi news discovery with a quota-aware query planner and incremental `when:` retrieval.
+- URL de-duplication, content-hash independent-source counting, and event clustering with a
+  consolidation pass.
+- Ollama investigation producing schema-validated, evidence-linked JSON (live mode).
+- Deterministic multi-component opportunity scoring with a published formula and a no-trade outcome.
+- Event feed (search/filter/sort), event investigation, historical replay, settings, key management.
+- Authenticated admin API, scoped read-only demo mode, rate limiting, validation, security headers.
+
+**Planned / partial (stated honestly, not faked in the UI):**
+
+- **Execution cost** is present in the score with weight 0 (no reliable spread/liquidity source).
+- **Google Search / Trends / Finance follow-ups** are wired in the provider layer but only suggested
+  by the model — they are never auto-executed, so no button pretends otherwise.
+- **No real-money trading**, no brokerage integration, and no options strategies (by design).
+- **Multi-user accounts** are not implemented; this is a single-admin local tool.
+- **Deeper backtesting** is limited to the labelled replay fixture.
+
+## 16. Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| `Cannot find module 'node:sqlite'` | You need Node.js **22.5+** (`node --version`). |
+| Port already in use | `PORT=3001 npm run demo` (or `npm start`). |
+| Dashboard asks for a login | You ran `npm start`. For the no-login judge demo use `npm run demo`. |
+| "Refusing to start: judge demo is loopback-only" | Unset `HOST` or set `HOST=127.0.0.1`. |
+| No events in the feed | You are in live mode with no key/no cycles yet — use `npm run demo`, or add keys and run a cycle. |
+| Ollama unavailable | Only affects live investigations. Install/pull a model, or stay in demo mode. |
+| Encryption-key error on startup | `APP_ENCRYPTION_KEY` must be 64 hex chars, base64 of 32 bytes, or a 32+ char passphrase. |
+
+## 17. Source
 
 Built against the SerpApi [Google Finance](https://serpapi.com/google-finance-api),
 [Google News](https://serpapi.com/google-news-api), [Google Search](https://serpapi.com/search-api),

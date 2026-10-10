@@ -1,19 +1,27 @@
 import { Router } from 'express';
 import { listScenarios, runReplay } from '../replay/engine.js';
+import { createConcurrencyGuard } from '../security/rateLimit.js';
+import { asString } from '../security/validate.js';
 
 const router = Router();
+const replayGuard = createConcurrencyGuard(1, 'A replay is already running.');
 
 router.get('/scenarios', (_req, res) => {
   res.json({ scenarios: listScenarios() });
 });
 
-router.post('/run', (req, res) => {
-  const scenarioId = String(req.body?.scenarioId || '').trim();
-  if (!scenarioId) return res.status(400).json({ error: 'scenarioId is required.' });
+router.post('/run', replayGuard, (req, res) => {
+  const scenarioId = asString(String(req.body?.scenarioId ?? ''), {
+    field: 'scenarioId',
+    min: 1,
+    max: 64,
+    pattern: /^[a-z0-9-]+$/i,
+  });
   try {
     res.json(runReplay(scenarioId));
-  } catch (err) {
-    res.status(404).json({ error: err.message });
+  } catch {
+    // Do not echo filesystem paths from the loader.
+    res.status(404).json({ error: 'Scenario not found.' });
   }
 });
 

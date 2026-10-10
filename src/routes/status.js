@@ -15,6 +15,7 @@ const router = Router();
 router.get('/', async (_req, res) => {
   const settings = getSettings();
   const db = getDb();
+  const demo = config.demoMode;
 
   const lastObs = db
     .prepare('SELECT MAX(retrieved_ts) AS rts, MAX(market_ts) AS mts FROM observations')
@@ -23,11 +24,17 @@ router.get('/', async (_req, res) => {
   const articleCount = Number(db.prepare('SELECT COUNT(*) AS c FROM articles').get().c);
   const eventCount = Number(db.prepare('SELECT COUNT(*) AS c FROM events').get().c);
   const uninvestigated = Number(
-    db.prepare('SELECT COUNT(*) AS c FROM events WHERE model_json IS NULL').get().c,
+    db.prepare('SELECT COUNT(*) FROM events WHERE model_json IS NULL').get().c,
   );
 
   const symbolCount = getSymbolSet().length;
-  const account = resolveSerpApiKey() ? await fetchSerpApiAccount(resolveSerpApiKey()) : null;
+
+  // Demo mode must make zero outbound calls: never contact SerpApi or Ollama.
+  const account = !demo && resolveSerpApiKey() ? await fetchSerpApiAccount(resolveSerpApiKey()) : null;
+  const ollama = demo
+    ? { available: false, demo: true, reason: 'Ollama is not contacted in demo mode.', models: [] }
+    : await ollamaStatus();
+
   let radarCoverage = null;
   try {
     radarCoverage = buildRadar().coverage;
@@ -38,13 +45,16 @@ router.get('/', async (_req, res) => {
   res.json({
     ok: true,
     now: new Date().toISOString(),
-    demoMode: config.demoMode,
+    demoMode: demo,
+    readOnly: demo,
+    authMode: demo ? 'demo' : 'required',
     node: process.version,
-    ollama: { ...(await ollamaStatus()) },
+    ollama,
     providers: {
-      market: settings.providers.market,
-      news: settings.providers.news,
+      market: demo ? 'fixture' : settings.providers.market,
+      news: demo ? 'fixture' : settings.providers.news,
     },
+    // Demo runs on an ephemeral DB, so this never exposes the operator's real keys.
     secrets: listSecretMeta().map((s) => ({
       name: s.name,
       configured: Boolean(s.configured),
@@ -54,8 +64,10 @@ router.get('/', async (_req, res) => {
     })),
     watchlistSize: listWatchlist().filter((w) => w.enabled).length,
     symbolSetSize: symbolCount,
-    monitoring: settings.monitoring,
-    scheduler: schedulerState(),
+    monitoring: demo ? { ...settings.monitoring, enabled: false } : settings.monitoring,
+    scheduler: demo
+      ? { lockHeld: false, monitoringEnabled: false, demo: true }
+      : schedulerState(),
     usage: {
       twelvedataToday: usageOn('twelvedata'),
       serpapiToday: usageOn('serpapi'),

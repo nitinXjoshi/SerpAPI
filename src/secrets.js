@@ -13,22 +13,75 @@ export const KNOWN_SECRETS = {
 
 let cachedKey = null;
 
+/**
+ * Parse an encryption key from configuration.
+ * Accepts 64 hex chars, base64 of exactly 32 bytes, or a passphrase of >= 32 chars
+ * (hashed with SHA-256). Anything else is rejected — we never silently weaken the key.
+ */
+export function parseEncryptionKey(raw) {
+  const val = String(raw ?? '').trim();
+  if (!val) throw new Error('Encryption key is empty.');
+  if (/^[0-9a-fA-F]{64}$/.test(val)) return { key: Buffer.from(val, 'hex'), derived: false };
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(val)) {
+    let buf = null;
+    try {
+      buf = Buffer.from(val, 'base64');
+    } catch {
+      buf = null;
+    }
+    if (buf && buf.length === 32) return { key: buf, derived: false };
+  }
+  if (val.length >= 32) {
+    return { key: crypto.createHash('sha256').update(val, 'utf8').digest(), derived: true };
+  }
+  throw new Error(
+    'APP_ENCRYPTION_KEY is invalid: expected 64 hex characters, base64 of 32 bytes, ' +
+      'or a passphrase of at least 32 characters.',
+  );
+}
+
 function encryptionKey() {
   if (cachedKey) return cachedKey;
   if (config.encryptionKey) {
-    const raw = config.encryptionKey.trim();
-    const buf = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
-    cachedKey = buf.length === 32 ? buf : crypto.createHash('sha256').update(raw).digest();
+    const { key, derived } = parseEncryptionKey(config.encryptionKey);
+    if (derived) {
+      logger.warn('secrets.key.derived', {
+        note: 'APP_ENCRYPTION_KEY was hashed with SHA-256. Prefer 64 hex chars or base64 of 32 bytes.',
+      });
+    }
+    cachedKey = key;
     return cachedKey;
   }
+
   const keyPath = path.join(config.dataDir, 'encryption.key');
   if (fs.existsSync(keyPath)) {
-    cachedKey = Buffer.from(fs.readFileSync(keyPath, 'utf8').trim(), 'hex');
+    let raw;
+    try {
+      raw = fs.readFileSync(keyPath, 'utf8');
+    } catch (err) {
+      throw new Error(`Cannot read encryption key file ${keyPath}: ${err.message}`, { cause: err });
+    }
+    try {
+      fs.chmodSync(keyPath, 0o600);
+    } catch {
+      /* best effort on platforms without POSIX modes */
+    }
+    const hex = raw.trim();
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+      throw new Error(`Encryption key file ${keyPath} is invalid (expected 64 hex characters).`);
+    }
+    cachedKey = Buffer.from(hex, 'hex');
     return cachedKey;
   }
+
   fs.mkdirSync(config.dataDir, { recursive: true });
   const key = crypto.randomBytes(32);
   fs.writeFileSync(keyPath, key.toString('hex'), { mode: 0o600 });
+  try {
+    fs.chmodSync(keyPath, 0o600);
+  } catch {
+    /* best effort */
+  }
   logger.info('secrets.keyfile.created', { path: keyPath });
   cachedKey = key;
   return cachedKey;
@@ -70,6 +123,7 @@ export function putSecret(name, value) {
   if (!KNOWN_SECRETS[name]) throw new Error(`Unknown secret: ${name}`);
   const clean = String(value || '').trim();
   if (!clean) throw new Error('Secret value is required.');
+  if (clean.length > 512) throw new Error('Secret value is too long.');
   const { ciphertext, iv, tag } = encrypt(clean);
   const now = new Date().toISOString();
   const db = getDb();
@@ -93,13 +147,12 @@ export function deleteSecret(name) {
 
 /** Internal use only — decrypted plaintext stays on the server. */
 export function getSecretValue(name) {
-  const row = getDb()
-    .prepare('SELECT ciphertext, iv, tag FROM secrets WHERE name = ?')
-    .get(name);
+  const row = getDb().prepare('SELECT ciphertext, iv, tag FROM secrets WHERE name = ?').get(name);
   if (!row) return null;
   try {
     return decrypt(row);
   } catch (err) {
+    // Never include the ciphertext or key material in the log.
     logger.error('secrets.decrypt.failed', { name, error: err.message });
     return null;
   }
@@ -143,6 +196,7 @@ function markValidated(name, status) {
 /**
  * Validate a key with the cheapest documented call. Never logs or returns the key.
  * serpapi: GET /account (free). twelvedata: GET /quote?symbol=AAPL (1 credit).
+ * Upstream error text is never surfaced verbatim to callers.
  */
 export async function validateSecret(name, value) {
   const key = value ?? getSecretValue(name);
@@ -179,7 +233,7 @@ export async function validateSecret(name, value) {
       const creditsLeft = Number(res.headers.get('api-credits-left'));
       if (data.code === 401 || data.status === 'error' || !res.ok) {
         markValidated(name, 'invalid');
-        return { ok: false, status: 'invalid', detail: data.message || 'Twelve Data rejected the key.' };
+        return { ok: false, status: 'invalid', detail: 'Twelve Data rejected the key.' };
       }
       markValidated(name, 'valid');
       return {
@@ -192,8 +246,14 @@ export async function validateSecret(name, value) {
     return { ok: false, status: 'unknown', detail: `No validator for ${name}.` };
   } catch (err) {
     markValidated(name, 'error');
-    return { ok: false, status: 'error', detail: `Validation failed: ${err.message}` };
+    logger.warn('secrets.validate.failed', { name, error: err.message });
+    return { ok: false, status: 'error', detail: 'Validation could not be completed.' };
   }
+}
+
+/** Test helper: forget the cached key so a new one is loaded. */
+export function _resetKeyCacheForTests() {
+  cachedKey = null;
 }
 
 export { mask };
