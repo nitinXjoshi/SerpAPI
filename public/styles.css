@@ -1370,6 +1370,21 @@ body.dash {
 }
 .demo-banner strong { color: #ffd98a; letter-spacing: 0.4px; }
 
+/* Hackathon mode: informative, not alarming (distinct from the amber demo banner). */
+.open-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(79, 140, 255, 0.10);
+  border: 1px solid rgba(79, 140, 255, 0.35);
+  color: #bcd2ff;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.open-banner strong { color: #dce8ff; letter-spacing: 0.4px; }
+
 .feed-toolbar {
   display: flex;
   flex-wrap: wrap;

@@ -1,120 +1,33 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Google Finance Viewer</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <title>InfoMark — Market Research</title>
+    <script src="./theme.js"></script>
+    <link rel="stylesheet" href="./markets.css" />
   </head>
   <body>
     <header class="topbar">
-      <div class="brand">
-        <span class="logo" aria-hidden="true">GF</span>
-        <div>
-          <h1>Google Finance Viewer</h1>
-          <p class="sub">SerpAPI · engine=google_finance</p>
-        </div>
-      </div>
-
-      <form id="search-form" class="search" autocomplete="off">
-        <div class="search-field">
-          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
-          </svg>
-          <input
-            id="query"
-            name="q"
-            list="examples"
-            placeholder="Search a stock, index, fund, currency or future — e.g. AAPL:NASDAQ"
-            autocomplete="off"
-            spellcheck="false"
-            required
-          />
-          <datalist id="examples">
-            <option value="AAPL:NASDAQ"></option>
-            <option value="GOOGL:NASDAQ"></option>
-            <option value="MSFT:NASDAQ"></option>
-            <option value="TSLA:NASDAQ"></option>
-            <option value="NVDA:NASDAQ"></option>
-            <option value="AMZN:NASDAQ"></option>
-            <option value="META:NASDAQ"></option>
-            <option value="WMT:NYSE"></option>
-            <option value="BRK.B:NYSE"></option>
-            <option value="BTC-USD"></option>
-            <option value="EUR-USD"></option>
-            <option value=".DJI:INDEXDJX"></option>
-          </datalist>
-          <div id="suggestions" class="suggestions hidden" role="listbox" aria-label="Recommendations"></div>
-        </div>
-        <button type="submit" id="search-btn">Search</button>
-      </form>
-
-      <a class="navlink" href="./dashboard.html">Intelligence Dashboard →</a>
+      <a class="brand" href="#/markets">
+        <span class="brand-mark" aria-hidden="true">IM</span>
+        <span>
+          <span class="brand-name">InfoMark</span>
+          <span class="brand-sub"> · market intelligence</span>
+        </span>
+      </a>
+      <nav class="mainnav" id="nav" aria-label="Primary"></nav>
+      <div class="topbar-right" id="topbar-right"></div>
     </header>
 
-    <main class="layout">
-      <aside class="sidebar">
-        <nav id="section-nav" aria-label="Sections"></nav>
-      </aside>
+    <div class="shell">
+      <div id="banner"></div>
+      <main id="view"></main>
+    </div>
 
-      <section class="content">
-        <div id="alert" class="alert hidden" role="alert"></div>
+    <div id="toast" class="toast hidden" role="status"></div>
 
-        <div id="loading" class="loading hidden">
-          <div class="spinner"></div>
-          <p>Fetching data from Google Finance…</p>
-        </div>
-
-        <div id="empty" class="empty">
-          <h2>Look up any market instrument</h2>
-          <p>
-            Type a ticker with its exchange (like <code>AAPL:NASDAQ</code>) or a currency pair
-            (<code>EUR-USD</code>), or just a symbol. Everything SerpAPI returns — live price,
-            graph, key stats, company profile, financial statements, news and related tickers —
-            is laid out below.
-          </p>
-          <div class="chips" id="empty-chips">
-            <button class="chip" data-q="AAPL:NASDAQ">AAPL:NASDAQ</button>
-            <button class="chip" data-q="GOOGL:NASDAQ">GOOGL:NASDAQ</button>
-            <button class="chip" data-q="MSFT:NASDAQ">MSFT:NASDAQ</button>
-            <button class="chip" data-q="NVDA:NASDAQ">NVDA:NASDAQ</button>
-            <button class="chip" data-q="BTC-USD">BTC-USD</button>
-            <button class="chip" data-q=".DJI:INDEXDJX">.DJI:INDEXDJX</button>
-          </div>
-          <p class="muted" id="empty-key-note"></p>
-        </div>
-
-        <div id="view" class="hidden">
-          <section id="sec-summary" class="sec" data-title="Overview"></section>
-          <section id="sec-chart" class="sec" data-title="Price chart"></section>
-          <section id="sec-stats" class="sec" data-title="Key stats"></section>
-          <section id="sec-about" class="sec" data-title="About"></section>
-          <section id="sec-financials" class="sec" data-title="Financials"></section>
-          <section id="sec-news" class="sec" data-title="News"></section>
-          <section id="sec-stocknews" class="sec" data-title="Latest news"></section>
-          <section id="sec-related" class="sec" data-title="Related"></section>
-          <section id="sec-raw" class="sec" data-title="Raw JSON"></section>
-        </div>
-
-        <section id="sec-directory" class="sec" data-title="Browse stocks"></section>
-      </section>
-    </main>
-
-    <template id="tpl-sec-head">
-      <div class="sec-head">
-        <h2></h2>
-        <div class="sec-tools"></div>
-      </div>
-    </template>
-
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="./catalog.js"></script>
-    <script src="./app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="./markets.js"></script>
   </body>
 </html>

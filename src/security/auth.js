@@ -22,8 +22,16 @@ let bypassWarned = false;
 let cleanupTimer = null;
 
 export function authMode() {
+  if (config.hackathonMode) return 'hackathon';
   if (config.demoMode) return 'demo';
   return config.auth.disabled ? 'disabled' : 'required';
+}
+
+/** True when the request arrived over the loopback interface. */
+export function isLoopbackRequest(req) {
+  const addr = req?.socket?.remoteAddress || req?.connection?.remoteAddress || '';
+  const a = String(addr);
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1' || a.startsWith('127.');
 }
 
 /**
@@ -37,7 +45,14 @@ const DEMO_ALLOW = [
   ['GET', /^\/settings$/],
   ['GET', /^\/watchlist$/],
   ['GET', /^\/market\/radar$/],
+  ['GET', /^\/market\/overview$/],
+  ['GET', /^\/market\/quotes$/],
+  ['GET', /^\/market\/quote\/[A-Za-z0-9.\-:]+$/],
+  ['GET', /^\/market\/candles\/[A-Za-z0-9.\-:]+$/],
+  ['GET', /^\/market\/search$/],
+  ['GET', /^\/market\/news\/[A-Za-z0-9.\-:]+$/],
   ['GET', /^\/events$/],
+  ['GET', /^\/opportunities$/],
   ['GET', /^\/events\/notifications$/],
   ['GET', /^\/events\/\d+$/],
   ['GET', /^\/news\/articles$/],
@@ -195,6 +210,20 @@ export function sameOriginGuard(req, res, next) {
 
 /** Attach the authenticated user, or reject with 401. */
 export function requireAuth(req, res, next) {
+  if (config.hackathonMode) {
+    // Hackathon mode removes the sign-in page but keeps every other protection.
+    // Binding is loopback-only (enforced at boot); this is defence in depth so a
+    // misconfigured bind can never expose an unauthenticated API to the network.
+    if (!isLoopbackRequest(req)) {
+      logger.warn('auth.hackathon.non_loopback_rejected', { ip: req.socket?.remoteAddress });
+      return res.status(403).json({
+        error: 'Hackathon mode only accepts loopback clients.',
+        code: 'non_loopback',
+      });
+    }
+    req.user = { name: 'hackathon-local', open: true };
+    return next();
+  }
   if (config.demoMode) {
     // Read-only demo: allow an explicit allowlist, reject everything else.
     if (!isDemoAllowed(req.method, req.path)) {

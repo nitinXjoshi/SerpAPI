@@ -15,27 +15,46 @@ viewer) at `/`. Both share the same Express server and styling.
 
 ---
 
-## Judge demo — start here
+## Three ways to run InfoMark
+
+| Mode | Command | Sign-in | Data | Providers | Use it for |
+| --- | --- | --- | --- | --- | --- |
+| **Hackathon (local)** | `npm run hackathon` | **none** | your persistent `data/intel.db` | **real** (your keys) | the judged demo — opens straight to the dashboard |
+| **Normal** | `npm start` | required | your persistent `data/intel.db` | real (your keys) | day-to-day use with authentication |
+| **Fixture demo** | `npm run demo` | none | ephemeral in-memory fixtures | **none** (zero external calls) | an instant, offline, read-only demonstration |
 
 ```bash
-npm ci            # or: npm install
-npm run demo
+npm ci                # or: npm install
+npm run hackathon     # judges: opens straight to the dashboard, no sign-in
 # open http://127.0.0.1:3000/dashboard.html
 ```
 
-That is the whole setup. The demo opens **straight into the dashboard — no login screen** — and runs
-entirely on deterministic **fixture data**:
+**Judges should use `npm run hackathon`.** It removes the sign-in page while keeping full
+functionality, so the Event Feed, event investigations, settings and API-key pages all work. If you
+have configured provider keys, it uses **real** SerpApi / Twelve Data data; no keys are required to
+open it.
 
-- **Zero** SerpApi, Twelve Data or Ollama requests. Your provider keys and your database are never
-  read, used or modified — the demo runs on an ephemeral in-memory database.
-- No API keys, no `.env`, no database setup, and no Ollama installation required.
-- **Loopback-only** (`127.0.0.1`); it refuses to start with a public `HOST`.
-- **Read-only**: writes, settings changes, key management and provider-triggering actions are
-  disabled and visibly marked, so a judge cannot spend quota or change anything.
-- Every screen is labelled: a **DEMO MODE** banner plus `DEMO · read-only` and `fixture data` chips,
-  so simulated data is never mistaken for live data.
+`npm run demo` remains available as a **read-only, fully offline** fallback (zero SerpApi, Twelve
+Data or Ollama requests) for an environment with no keys and no network.
 
 Presenter script: [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md).
+
+### Hackathon mode and security
+
+Hackathon mode removes the login requirement but keeps every other protection:
+
+- **Loopback-only**: it binds to `127.0.0.1` and **refuses to start** if `HOST` points at a public
+  interface. Requests are additionally rejected unless they arrive from loopback.
+- Same-origin (CSRF) checks, input validation, rate limits, concurrency guards, security headers and
+  error redaction all remain enabled.
+- Provider keys stay encrypted server-side and are returned to the browser only **masked** (last 4
+  characters). Nothing is written to `localStorage`/`sessionStorage`.
+- It uses your normal persistent database and existing encryption key. It does **not** force fixture
+  providers and does **not** seed sample data.
+
+Trade-off: with no sign-in, anyone who can reach the process on this machine can read the (masked)
+key metadata and change settings. That is acceptable for a local hackathon, which is exactly why the
+mode refuses any non-loopback bind. `npm start` keeps authentication for anything longer-lived.
 
 ## The problem
 
@@ -59,20 +78,55 @@ it — or say there is not enough evidence.**
   observation times are kept separate; `sample`, `reported`, `analytical` and `model-generated`
   content are labelled distinctly.
 
-## Demo (fixture) mode vs live mode
+## The product (pages)
 
-| | `npm run demo` (judge demo) | `npm start` (live) |
+The primary UI is a market-research site, not an admin dashboard:
+
+| Page | Route | What it does |
 | --- | --- | --- |
-| Login | none (read-only demo principal) | required (admin credentials) |
-| Data | deterministic fixtures | live SerpApi / Twelve Data |
-| Database | ephemeral in-memory | `data/intel.db` |
-| Ollama | never contacted | used for investigations |
-| Provider calls | **zero** | subject to your quotas |
-| Writes | disabled (read-only) | enabled for an authenticated admin |
-| Binding | loopback-only enforced | `127.0.0.1` by default |
+| **Markets** | `/` (`#/markets`) | Market overview (ETF proxies), a searchable/sortable/paginated stock explorer, tabs for Watchlist / Market ETFs / Search, and add/remove watchlist actions. |
+| **Watchlist** | `#/watchlist` | Your tracked symbols with the latest available quotes and freshness. |
+| **News** | `#/news` | Deduplicated event feed (search, sort) with an event detail view separating source-confirmed facts from AI summaries. |
+| **Settings** | `#/settings` | API keys (masked), provider selection, polling interval, theme, and status. |
+| **Stock detail** | `#/stock/NVDA` | Real quote, **real OHLC candlestick chart** (Lightweight Charts) with interval switching, period metrics, and related news. |
 
-`DEMO_MODE=true` is what enables the demo; it is never on by default and never changes behaviour in
-normal mode.
+Light/dark theme is available from the header or Settings and persists per browser (OS preference on
+first visit, no flash).
+
+## Data integrity rules
+
+- **No fabricated live data.** Synthetic fixtures exist only in demo mode and are always labelled
+  (`source: fixture`, `synthetic: true`). Fixture providers are *blocked* from writing to the normal
+  database, so a missing provider key shows an honest "provider unavailable" state rather than fake
+  prices.
+- **News requires a provider key.** With no SerpApi key the feed stays empty and says so.
+- **Provider errors are surfaced, not hidden.** Market-data requests respect the per-minute and
+  daily budget; when the budget is exhausted you get a clear message, not stale numbers presented as
+  live.
+- Each quote carries its **observation timestamp** and a `fresh`/`stale` label.
+
+## Deployment: local vs public
+
+This repository is documented for **local** operation. It is **not** ready to expose publicly:
+
+- The local hackathon/demo modes are unauthenticated and loopback-only by design.
+- A public, multi-user deployment needs, at minimum: real user accounts and sessions, **per-user
+  encrypted key storage with strict tenant isolation**, authorization on every private resource,
+  CSRF protection, per-user rate limits and budgets, a secrets manager with key rotation, SSRF
+  protection (including blocking arbitrary Ollama endpoints), and a multi-instance-safe scheduler.
+- Do **not** run a shared global provider key for all visitors, and do **not** reuse the
+  unauthenticated hackathon mode as the public architecture.
+
+## Mode configuration
+
+Modes are selected by environment variables (or the npm scripts above), never by editing source:
+
+- `HACKATHON_MODE=true` — no sign-in, full functionality, loopback-only (`npm run hackathon`).
+- `DEMO_MODE=true` — read-only fixtures, ephemeral in-memory database (`npm run demo`).
+- neither set — normal mode, authentication required (`npm start`).
+
+`DEMO_MODE` and `HACKATHON_MODE` are mutually exclusive: the server refuses to start if both are
+set. Neither is enabled by default, and neither changes behaviour in normal mode.
 
 ---
 
@@ -183,7 +237,8 @@ Open **http://localhost:3000/dashboard.html** for the intelligence dashboard, an
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama base URL (local only) |
 | `OLLAMA_MODEL` | auto-discovered | Preferred Ollama model |
 | `OLLAMA_TIMEOUT_MS` | `60000` | Inference timeout |
-| `DEMO_MODE` | `false` | Force fixture providers (no external calls) |
+| `DEMO_MODE` | `false` | Read-only fixture demo (no login, ephemeral DB, zero provider calls). Never on by default. |
+| `HACKATHON_MODE` | `false` | Local hackathon mode: no login, full functionality, real providers, loopback-only. Never on by default; mutually exclusive with `DEMO_MODE`. |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `SERPAPI_API_KEY` | — | Optional; the dashboard **API Keys** page is preferred |
 | `TWELVEDATA_API_KEY` | — | Optional; the dashboard **API Keys** page is preferred |
@@ -299,9 +354,38 @@ capped at watch. The score is a **ranking score, not a calibrated probability of
 - **Single instance**: a `scheduler_locks` row with a heartbeat prevents two processes from running
   overlapping cycles; stale locks (heartbeat > 60s) are taken over.
 - **Non-overlapping**: in-flight guards per job; failures use exponential backoff (capped at 30 min).
-- **Recovery**: on boot, an overdue news cycle is run shortly after start. Enabling monitoring in
-  Settings immediately kicks both jobs rather than waiting a full interval.
+- **Recovery**: on boot, an overdue news cycle is run shortly after start, and any cycle left
+  `running` by a crash is re-labelled `interrupted` (it never completed) instead of showing as live.
+  Enabling monitoring in Settings immediately kicks both jobs rather than waiting a full interval.
+- **Quota-gated cadence (be honest about this)**: the scheduler *ticks* every 10 minutes, but each
+  paid search is gated by the monthly budget planner. On a 250-search/month SerpApi tier that works
+  out to roughly **8 searches/day**, so most 10-minute ticks spend zero queries and record that
+  honestly. A literal six-query 10-minute cycle is not possible on the free tier.
+- Each cycle persists what actually happened: articles seen, exact duplicates removed, new events,
+  merged clusters and investigated events, plus provider errors. The panel reads these real numbers.
+- **Interactive headroom**: background market polling reserves part of the per-minute provider
+  allowance so opening a chart can never be starved by the poller.
 - Idempotent ingestion via unique URL hashes; provider failures degrade gracefully and are surfaced.
+
+---
+
+## 8a. Markets homepage &amp; AI Opportunity Intelligence
+
+The Markets page is a two-column terminal: a searchable stock explorer and market overview on the
+left (~42%), and the **AI Opportunity Intelligence** panel on the right (~58%) — it stacks vertically
+on narrow screens rather than being hidden.
+
+- The panel's status strip is computed from live application state (never hardcoded counters): last
+  scan time and status, next scheduled scan, news-provider status, Ollama/model availability, new
+  articles, duplicates removed, clusters analysed and how many need attention.
+- Opportunity cards show the headline, tickers, category, first-seen/last-updated times, report and
+  independent-source counts, the model's summary/impact/uncertainty/contradictions, the measured
+  market reaction with freshness, an evidence-quality indicator and a status badge
+  (`POTENTIAL_OPPORTUNITY` / `WATCH` / `INSUFFICIENT_EVIDENCE` / `NO_TRADE`).
+- Empty states are explicit ("No new opportunities detected", "Waiting for the next news scan").
+  Clusters with no stored analysis say "AI analysis pending" rather than inventing a summary.
+- A *news catalyst*, a *potential dislocation* and an *arbitrage candidate* are distinct concepts
+  here. Nothing is labelled arbitrage without a verified, measurable price discrepancy.
 
 ---
 
@@ -329,6 +413,7 @@ Delete `data/intel.db*` to reset (the default watchlist is re-seeded on boot).
 | `GET /api/market/radar` · `POST /api/market/poll` | Radar / force poll |
 | `GET /api/news/plan` · `POST /api/news/run` · `GET /api/news/articles` | News cycle |
 | `GET /api/events` · `GET /api/events/:id` | Event feed / detail |
+| `GET /api/opportunities` | AI Opportunity Intelligence panel: real scan/cluster metrics + ranked, evidence-backed opportunity cards |
 | `POST /api/events/:id/investigate` · `/score` · `/status` · `/followup` | Event actions |
 | `GET /api/events/notifications` | Notifications |
 | `GET /api/ollama/status` · `POST /api/ollama/investigate-pending` | Ollama |
@@ -399,13 +484,14 @@ and the **demo-mode read-only boundary** (including a test asserting the demo se
 ## 14. Commands
 
 ```bash
-npm run demo              # judge demo: no login, fixtures, zero provider calls (loopback only)
-npm start                 # normal mode (authenticated)
-npm run dev               # normal mode with --watch
-npm test                  # unit/integration tests (no paid calls)
-npm run check             # security/health checks (syntax + secret scan + ignore assertions)
-npm run audit             # dependency vulnerability report
-npm run verify            # check + tests
+npm run hackathon        # judged demo: no login, real providers, loopback-only, persistent data
+npm run demo             # read-only fixture demo: no login, zero provider calls, ephemeral data
+npm start                # normal mode (authenticated)
+npm run dev              # normal mode with --watch
+npm test                 # unit/integration tests (no paid calls)
+npm run check            # security/health checks (syntax + secret scan + ignore assertions)
+npm run audit            # dependency vulnerability report
+npm run verify           # check + tests
 ```
 
 ## 15. Implemented vs planned

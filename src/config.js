@@ -25,6 +25,12 @@ export const config = {
   dataDir,
   dbPath: process.env.DB_PATH || path.join(dataDir, 'intel.db'),
   demoMode: bool(process.env.DEMO_MODE, false),
+  /**
+   * Local hackathon presentation mode: no sign-in page, full functionality, real
+   * providers, persistent database. Loopback-only. Distinct from demoMode (read-only
+   * fixtures) and from normal mode (authentication required).
+   */
+  hackathonMode: bool(process.env.HACKATHON_MODE, false),
   encryptionKey: process.env.APP_ENCRYPTION_KEY || null,
   ollama: {
     host: process.env.OLLAMA_HOST || 'http://localhost:11434',

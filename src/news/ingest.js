@@ -1,4 +1,5 @@
 import { getSettings, getSetting } from '../db.js';
+import { config } from '../config.js';
 import { listWatchlist } from '../watchlist.js';
 import { resolveNewsProvider } from '../providers/news/index.js';
 import { resolveSerpApiKey, fetchSerpApiAccount } from '../serpapi.js';
@@ -9,6 +10,7 @@ import { insertArticleIfNew } from './store.js';
 import { startCycle, finishCycle } from '../cycles.js';
 import { recordUsage } from '../quota/usageStore.js';
 import { clusterArticles, consolidateEvents } from './cluster.js';
+import { buildGenericTokens } from './genericTokens.js';
 import * as EventStore from '../events/store.js';
 import { scoreEventById } from '../scoring/opportunity.js';
 import { investigatePendingEvents } from '../ollama/investigate.js';
@@ -23,6 +25,24 @@ export async function runNewsCycle({ force = false, now = new Date() } = {}) {
   const settings = getSettings();
   const watchlist = listWatchlist();
   const provider = resolveNewsProvider(settings);
+  // Fixture news must never be written to the persistent (live) database. Outside demo
+  // mode a missing provider key means "no news", not synthetic articles.
+  if (provider.id === 'fixture' && !config.demoMode) {
+    return {
+      summary: {
+        provider: 'fixture',
+        skipped: true,
+        reason: 'provider_unavailable',
+        queriesRun: 0,
+        articlesNew: 0,
+        eventsNew: 0,
+        note: 'No news provider configured. Add a SerpApi key in Settings; fixture news is demo-only.',
+      },
+      articles: [],
+      deferred: [],
+      cycleId: null,
+    };
+  }
   const apiKey = provider.id === 'serpapi' ? resolveSerpApiKey() : null;
   const account = provider.id === 'serpapi' ? await fetchSerpApiAccount(apiKey) : null;
 
@@ -41,6 +61,7 @@ export async function runNewsCycle({ force = false, now = new Date() } = {}) {
   const errors = [];
   let queriesUsed = 0;
   let creditsUsed = 0;
+  let articlesSeen = 0;
   const insertedArticles = [];
   const nameBySymbol = Object.fromEntries(watchlist.map((w) => [w.symbol, w.companyName]));
 
@@ -64,12 +85,14 @@ export async function runNewsCycle({ force = false, now = new Date() } = {}) {
     for (const raw of flattenNewsItems(res.items)) {
       const art = normalizeArticle(raw, { spec, watchlist, now });
       if (!art.url) continue;
+      articlesSeen += 1;
       if (insertArticleIfNew(art)) insertedArticles.push(art);
     }
   }
 
   // Cluster the newly stored articles into (or onto) events, then merge duplicates.
-  const clustered = clusterArticles(insertedArticles, { now });
+  const genericTokens = buildGenericTokens(watchlist);
+  const clustered = clusterArticles(insertedArticles, { now, genericTokens });
   const consolidation = consolidateEvents({ now });
   const createdIds = [...new Set(clustered.filter((c) => c.created).map((c) => c.eventId))];
   const surviving = createdIds.filter((id) => EventStore.getEvent(id));
@@ -90,6 +113,8 @@ export async function runNewsCycle({ force = false, now = new Date() } = {}) {
     status: errors.length && insertedArticles.length === 0 ? 'partial' : 'ok',
     queriesUsed,
     articlesNew: insertedArticles.length,
+    articlesSeen,
+    articlesDuplicate: Math.max(0, articlesSeen - insertedArticles.length),
     eventsNew,
     errors,
     finishedTs: new Date().toISOString(),
@@ -120,6 +145,8 @@ export async function runNewsCycle({ force = false, now = new Date() } = {}) {
     queriesUsed,
     creditsUsed,
     articlesNew: insertedArticles.length,
+    articlesSeen,
+    articlesDuplicate: Math.max(0, articlesSeen - insertedArticles.length),
     eventsNew,
     eventsMerged: consolidation.merged,
     investigated,

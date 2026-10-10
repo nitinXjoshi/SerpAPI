@@ -125,8 +125,8 @@ test('an authenticated session can read data, and without keys no paid calls are
   assert.equal(body.demoMode, false, 'normal mode is not demo mode');
   assert.equal(body.authMode, 'required');
 
-  // Without provider keys the market poll resolves through the fixture provider
-  // (0 credits, no outbound request).
+  // Without provider keys the poll must report "no provider" rather than inventing
+  // fixture quotes into the live database.
   const poll = await fetch(`${BASE}/api/market/poll`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: BASE },
@@ -134,8 +134,9 @@ test('an authenticated session can read data, and without keys no paid calls are
   });
   assert.equal(poll.status, 200);
   const pollBody = await poll.json();
-  assert.equal(pollBody.result.provider, 'fixture');
-  assert.equal(pollBody.result.creditsUsed, 0);
+  assert.equal(pollBody.result.skipped, true);
+  assert.equal(pollBody.result.reason, 'provider_unavailable');
+  assert.equal(pollBody.result.creditsUsed || 0, 0);
 });
 
 test('invalid input is rejected with 400', async () => {

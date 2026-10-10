@@ -95,6 +95,34 @@ function isDemo() {
   return session.mode === 'demo';
 }
 
+/** Local hackathon mode: no sign-in, full functionality, loopback only. */
+function isHackathon() {
+  return session.mode === 'hackathon';
+}
+
+/**
+ * Persistent, non-blocking notice shown in hackathon mode so the disabled sign-in is
+ * explicit rather than silent. Inserted once, outside the per-view content.
+ */
+function renderAccessBanner() {
+  const existing = document.getElementById('access-banner');
+  if (!isHackathon()) {
+    existing?.remove();
+    return;
+  }
+  if (existing) return;
+  const banner = document.createElement('div');
+  banner.id = 'access-banner';
+  banner.className = 'open-banner';
+  banner.setAttribute('role', 'status');
+  banner.innerHTML =
+    '<strong>HACKATHON MODE</strong> — no sign-in. Bound to localhost only; ' +
+    'provider keys stay on the server and are never sent to the browser.';
+  const main = document.querySelector('.dash-main');
+  const view = document.getElementById('view');
+  if (main && view) main.insertBefore(banner, view);
+}
+
 /** Prominent, always-visible notice explaining the demo's data provenance. */
 function demoBanner() {
   if (!isDemo()) return '';
@@ -143,12 +171,15 @@ async function renderStatusBar() {
   }
   try {
     const s = await api('/api/status');
+    renderAccessBanner();
     const keyed = s.secrets.filter((x) => x.configured).length;
-    const authPill = isDemo()
-      ? '<span class="pill warn">DEMO · read-only</span>'
-      : session.mode === 'disabled'
-        ? '<span class="pill warn">auth DISABLED</span>'
-        : `<span class="pill ok">signed in: ${esc(session.user || 'admin')}</span>`;
+    const authPill = isHackathon()
+      ? '<span class="pill warn" title="Authentication is disabled for the local hackathon; loopback only">hackathon · no login</span>'
+      : isDemo()
+        ? '<span class="pill warn">DEMO · read-only</span>'
+        : session.mode === 'disabled'
+          ? '<span class="pill warn">auth DISABLED</span>'
+          : `<span class="pill ok">signed in: ${esc(session.user || 'admin')}</span>`;
     const modePill = s.demoMode
       ? '<span class="pill warn" title="Fixture data only — no live provider calls">fixture data</span>'
       : '<span class="pill ok">live-capable</span>';
@@ -158,7 +189,7 @@ async function renderStatusBar() {
       <span class="pill">${esc(s.scheduler ? (s.scheduler.lockHeld ? 'scheduler: leader' : 'scheduler: standby') : '')}</span>
       <span class="pill ${s.ollama.available ? 'ok' : 'warn'}">ollama ${s.ollama.available ? esc(s.ollama.selectedModel || s.ollama.models?.[0] || 'ready') : 'off'}</span>
       <span class="pill">${isDemo() ? 'keys: demo' : `${keyed}/2 keys`}</span>
-      ${isDemo() || session.mode === 'disabled' ? '' : '<button class="btn small ghost" id="logout-btn" type="button">Sign out</button>'}`;
+      ${isDemo() || isHackathon() || session.mode === 'disabled' ? '' : '<button class="btn small ghost" id="logout-btn" type="button">Sign out</button>'}`;
     document.getElementById('logout-btn')?.addEventListener('click', logout);
     return s;
   } catch (e) {

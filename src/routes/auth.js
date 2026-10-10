@@ -29,6 +29,18 @@ function authMethod() {
 }
 
 router.get('/session', (req, res) => {
+  if (config.hackathonMode) {
+    // No sign-in page: the dashboard opens directly. Full functionality (not read-only).
+    return res.json({
+      authenticated: true,
+      mode: 'hackathon',
+      user: 'hackathon-local',
+      method: 'none',
+      readOnly: false,
+      demoMode: false,
+      openAccess: true,
+    });
+  }
   if (config.demoMode) {
     return res.json({
       authenticated: true,
@@ -55,11 +67,8 @@ router.get('/session', (req, res) => {
 });
 
 router.post('/login', loginLimiter, (req, res) => {
-  if (config.demoMode) {
-    return res.status(403).json({ error: 'Authentication is disabled in read-only demo mode.' });
-  }
-  if (config.auth.disabled) {
-    return res.json({ authenticated: true, mode: 'disabled', user: 'insecure-local' });
+  if (config.hackathonMode || config.demoMode || config.auth.disabled) {
+    return res.status(403).json({ error: 'Authentication is not used in this mode.' });
   }
   const body = req.body || {};
   let username;

@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
 import { jaccard, overlap, shingles, tokenize } from './dedup.js';
+import { buildGenericTokens, stripGeneric } from './genericTokens.js';
 import * as EventStore from '../events/store.js';
 
 export const WINDOW_HOURS = 48;
 export const SIM_THRESHOLD = 0.5; // headline shingle similarity → same story, reworded
-export const TOKEN_THRESHOLD = 0.25; // headline+snippet token overlap → same topic coverage
+export const TOKEN_THRESHOLD = 0.2; // per-member overlap of *story* words (company names excluded)
 
 function makeClusterKey(symbols, headline) {
   const tokens = tokenize(headline).slice(0, 5).join('-');
@@ -37,14 +38,16 @@ export function clusterArticles(articles, {
   windowHours = WINDOW_HOURS,
   threshold = SIM_THRESHOLD,
   tokenThreshold = TOKEN_THRESHOLD,
+  genericTokens = null,
 } = {}) {
+  const generic = genericTokens || buildGenericTokens([]);
   const results = [];
   const sinceIso = new Date(now.getTime() - windowHours * 3600 * 1000).toISOString();
   const candidates = EventStore.recentEventCandidates({ sinceIso });
 
   for (const art of articles) {
     const artShingles = shingles(art.headline);
-    const artTokens = new Set(tokenize(`${art.headline} ${art.snippet || ''}`));
+    const artTokens = stripGeneric(new Set(tokenize(`${art.headline} ${art.snippet || ''}`)), generic);
     const symbols = art.symbols || [];
     const artTime = Date.parse(art.publishedTs || art.firstSeenTs || now.toISOString());
 
@@ -69,7 +72,14 @@ export function clusterArticles(articles, {
         strongEv = ev;
       }
 
-      const tk = overlap(artTokens, ev.tokens);
+      // Compare against the BEST individual article in the event (not the growing
+      // aggregate) so a hot ticker with many different stories cannot gradually
+      // absorb unrelated headlines.
+      let tk = 0;
+      for (const member of ev.tokensList || [ev.tokens]) {
+        const s = overlap(artTokens, member);
+        if (s > tk) tk = s;
+      }
       if (tk >= tokenThreshold && tk > tokenSim) {
         tokenSim = tk;
         tokenEv = ev;
@@ -86,13 +96,23 @@ export function clusterArticles(articles, {
       EventStore.updateEvent(match.id, { lastUpdatedTs: art.firstSeenTs, symbols: mergedSymbols });
       match.titleShingles.push(artShingles);
       match.tokens = setUnion(match.tokens, artTokens);
+      match.tokensList = [...(match.tokensList || []), artTokens];
       match.symbols = mergedSymbols;
       match.lastUpdatedTs = art.firstSeenTs;
       match.articleCount += 1;
       results.push({ eventId: match.id, created: false, urlHash: art.urlHash, similarity: round(similarity), tier });
     } else {
+      const clusterKey = makeClusterKey(symbols, art.headline);
+      // cluster_key is UNIQUE: an identical key means the same story, so attach instead
+      // of attempting a duplicate insert (which previously aborted the cycle).
+      const existing = EventStore.getEventByClusterKey(clusterKey);
+      if (existing) {
+        EventStore.attachArticle(existing.id, art.urlHash, false);
+        results.push({ eventId: existing.id, created: false, urlHash: art.urlHash, similarity: 0, tier: 'key' });
+        continue;
+      }
       const ev = EventStore.createEvent({
-        clusterKey: makeClusterKey(symbols, art.headline),
+        clusterKey,
         title: art.headline,
         category: 'other',
         symbols,

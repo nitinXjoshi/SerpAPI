@@ -3,7 +3,7 @@ import { getDb, getSettings } from './db.js';
 import { pollMarket, adaptiveIntervalMs, marketStatus } from './market/poller.js';
 import { buildRadar } from './market/radar.js';
 import { runNewsCycle } from './news/ingest.js';
-import { lastCycle } from './cycles.js';
+import { lastCycle, markInterruptedCycles } from './cycles.js';
 import { logger } from './logger.js';
 
 const OWNER = `${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
@@ -151,6 +151,9 @@ export function startScheduler() {
   if (state.started) return state;
   state.started = true;
   state.lockHeld = acquireLock();
+
+  const interrupted = markInterruptedCycles();
+  if (interrupted) logger.warn('scheduler.recovered_interrupted_cycles', { count: interrupted });
 
   heartbeatTimer = setInterval(() => {
     if (state.lockHeld) writeHeartbeat();

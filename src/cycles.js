@@ -7,10 +7,20 @@ export function startCycle({ kind, startedTs, queriesPlanned = 0, status = 'runn
   return Number(res.lastInsertRowid);
 }
 
-export function finishCycle(id, { status, queriesUsed = 0, articlesNew = 0, eventsNew = 0, errors = [], finishedTs } = {}) {
+export function finishCycle(id, {
+  status,
+  queriesUsed = 0,
+  articlesNew = 0,
+  eventsNew = 0,
+  articlesSeen = null,
+  articlesDuplicate = null,
+  errors = [],
+  finishedTs,
+} = {}) {
   getDb()
     .prepare(
-      `UPDATE cycles SET finished_ts = ?, status = ?, queries_used = ?, articles_new = ?, events_new = ?, errors_json = ?
+      `UPDATE cycles SET finished_ts = ?, status = ?, queries_used = ?, articles_new = ?, events_new = ?,
+         articles_seen = ?, articles_duplicate = ?, errors_json = ?
        WHERE id = ?`,
     )
     .run(
@@ -19,6 +29,8 @@ export function finishCycle(id, { status, queriesUsed = 0, articlesNew = 0, even
       queriesUsed,
       articlesNew,
       eventsNew,
+      articlesSeen,
+      articlesDuplicate,
       JSON.stringify(errors || []),
       id,
     );
@@ -38,9 +50,24 @@ export function lastCycle(kind = null) {
     queriesPlanned: row.queries_planned,
     queriesUsed: row.queries_used,
     articlesNew: row.articles_new,
+    articlesSeen: row.articles_seen,
+    articlesDuplicate: row.articles_duplicate,
     eventsNew: row.events_new,
     errors: safeParse(row.errors_json),
   };
+}
+
+/**
+ * A cycle still marked `running` was left behind by a crashed or restarted process —
+ * it never completed, so record that honestly instead of showing it as in-progress.
+ */
+export function markInterruptedCycles() {
+  const res = getDb()
+    .prepare(
+      "UPDATE cycles SET status = 'interrupted', finished_ts = COALESCE(finished_ts, started_ts) WHERE status = 'running'",
+    )
+    .run();
+  return Number(res.changes || 0);
 }
 
 export function recentCycles(limit = 20) {

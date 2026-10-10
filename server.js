@@ -17,7 +17,7 @@ import {
   sanitizeUpstream,
   upstreamErrorMessage,
 } from './src/security/errors.js';
-import { initAuth, stopAuth, requireAuth, sameOriginGuard } from './src/security/auth.js';
+import { initAuth, stopAuth, requireAuth, sameOriginGuard, authMode } from './src/security/auth.js';
 import { asString, asEnum } from './src/security/validate.js';
 import { seedDemoData } from './src/demo/seed.js';
 
@@ -29,6 +29,7 @@ import statusRouter from './src/routes/status.js';
 import marketRouter from './src/routes/market.js';
 import newsRouter from './src/routes/news.js';
 import eventsRouter from './src/routes/events.js';
+import opportunitiesRouter from './src/routes/opportunities.js';
 import ollamaRouter from './src/routes/ollama.js';
 import replayRouter from './src/routes/replay.js';
 
@@ -155,7 +156,8 @@ app.post(
     const apiKey = resolveSerpApiKey();
     if (!apiKey) return res.status(503).json({ error: 'No SerpAPI key configured.' });
 
-    const { status, data } = await callSerpApi('google_news', query, { gl: 'us', hl: 'en', so: '1' }, apiKey);
+    // google_news rejects `so` together with `q`; omit it for query-based lookups.
+    const { status, data } = await callSerpApi('google_news', query, { gl: 'us', hl: 'en' }, apiKey);
     if (status !== 200 || data?.error) {
       return res.status(status === 200 ? 502 : status).json({ error: upstreamErrorMessage(status) });
     }
@@ -173,6 +175,7 @@ app.use('/api/watchlist', watchlistRouter);
 app.use('/api/market', heavy, marketRouter);
 app.use('/api/news', heavy, newsRouter);
 app.use('/api/events', eventsRouter);
+app.use('/api/opportunities', opportunitiesRouter);
 app.use('/api/ollama', heavy, ollamaRouter);
 app.use('/api/replay', heavy, replayRouter);
 app.use('/api/status', statusRouter);
@@ -208,15 +211,24 @@ app.use((err, _req, res, _next) => {
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
 async function boot() {
-  // Demo mode must never be exposed off-host.
-  if (config.demoMode && !LOOPBACK_HOSTS.has(config.host)) {
-    console.error(`\n  Refusing to start: judge demo is loopback-only (HOST=${config.host}).`);
+  if (config.demoMode && config.hackathonMode) {
+    console.error('\n  Refusing to start: DEMO_MODE and HACKATHON_MODE are mutually exclusive.');
+    console.error('  Use one mode at a time.\n');
+    process.exit(1);
+  }
+
+  // Both demo and hackathon modes are unauthenticated, so they must never be exposed
+  // off-host: refuse any non-loopback bind before opening a socket.
+  if ((config.demoMode || config.hackathonMode) && !LOOPBACK_HOSTS.has(config.host)) {
+    const which = config.hackathonMode ? 'hackathon mode' : 'judge demo';
+    console.error(`\n  Refusing to start: ${which} is loopback-only (HOST=${config.host}).`);
     console.error('  Unset HOST or use HOST=127.0.0.1.\n');
     process.exit(1);
   }
 
   // Demo runs on an ephemeral in-memory database so it can never touch, expose, or
-  // mutate the operator's real data or stored provider keys.
+  // mutate the operator's real data or stored provider keys. Hackathon mode uses the
+  // normal persistent database (and the existing encryption key / stored credentials).
   initDb({ dbPath: config.demoMode ? ':memory:' : config.dbPath });
 
   if (listWatchlist().length === 0) {
@@ -227,23 +239,33 @@ async function boot() {
   if (config.demoMode) {
     const summary = await seedDemoData();
     logger.info('demo.ready', summary);
-  } else {
+  } else if (!config.hackathonMode) {
+    // Hackathon mode has no sessions or login, so no auth bootstrap is needed.
     initAuth();
   }
 
   const server = app.listen(config.port, config.host, () => {
-    logger.info('server.listening', { host: config.host, port: config.port, demo: config.demoMode });
+    logger.info('server.listening', {
+      host: config.host,
+      port: config.port,
+      mode: authMode(),
+    });
     const base = `http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${config.port}`;
     console.log(`\n  InfoMark  ->  ${base}`);
     console.log(`  Dashboard:  ${base}/dashboard.html`);
     console.log(`  Explorer:   ${base}/`);
-    if (config.demoMode) {
+    if (config.hackathonMode) {
+      console.log('  Mode:       HACKATHON (no sign-in) — loopback only, real providers');
+      console.log('  Security:   validation, rate limits, same-origin checks, headers and key masking stay active');
+    } else if (config.demoMode) {
       console.log('  Mode:       DEMO (read-only) — fixture data, no provider or Ollama calls');
       console.log('  Login:      not required in demo mode');
     } else {
       console.log(
         `  Auth:       ${config.auth.disabled ? 'DISABLED (insecure local mode)' : 'required (log in with your admin credentials)'}`,
       );
+    }
+    if (!config.demoMode) {
       console.log(
         resolveSerpApiKey()
           ? '  SerpAPI key: configured'

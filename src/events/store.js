@@ -1,5 +1,7 @@
 import { getDb } from '../db.js';
 import { shingles, tokenize } from '../news/dedup.js';
+import { buildGenericTokens, stripGeneric } from '../news/genericTokens.js';
+import { listWatchlist } from '../watchlist.js';
 
 function parse(json, fallback) {
   if (!json) return fallback;
@@ -178,14 +180,21 @@ export function recentEventCandidates({ sinceIso }) {
       )
       .all(r.id);
     const ev = rowToEvent(r);
+    const generic = buildGenericTokens(listWatchlist());
     const tokens = new Set();
-    for (const a of arts) for (const t of tokenize(`${a.headline || ''} ${a.snippet || ''}`)) tokens.add(t);
+    const tokensList = [];
+    for (const a of arts) {
+      const set = stripGeneric(new Set(tokenize(`${a.headline || ''} ${a.snippet || ''}`)), generic);
+      if (set.size) tokensList.push(set);
+      for (const t of set) tokens.add(t);
+    }
     return {
       id: ev.id,
       symbols: ev.symbols,
       lastUpdatedTs: ev.lastUpdatedTs,
       titleShingles: arts.filter((a) => a.headline).map((a) => shingles(a.headline)),
       tokens,
+      tokensList,
       articleCount: arts.length,
     };
   });

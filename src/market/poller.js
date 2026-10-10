@@ -1,4 +1,5 @@
 import { getSettings } from '../db.js';
+import { config } from '../config.js';
 import { getSymbolSet } from '../watchlist.js';
 import { resolveMarketProvider, getTwelveDataKey } from '../providers/market/index.js';
 import { insertObservations } from './store.js';
@@ -60,8 +61,27 @@ export async function pollMarket({ force = false, now = new Date(), allowWait = 
   }
 
   const provider = resolveMarketProvider(settings);
+  // Fixture data must never be written to the persistent (live) database. Outside demo
+  // mode, a missing provider key means "no data" — not synthetic prices.
+  if (provider.id === 'fixture' && !config.demoMode) {
+    return {
+      skipped: true,
+      reason: 'provider_unavailable',
+      provider: 'fixture',
+      message: 'No market-data provider configured. Add a Twelve Data key in Settings; fixtures are demo-only.',
+      at: now.toISOString(),
+      marketStatus: status,
+    };
+  }
   const isMetered = provider.id === 'twelvedata';
-  const perMinute = isMetered ? settings.budget.twelvedataPerMinute : Infinity;
+  // Reserve part of the per-minute allowance for interactive requests (a user opening a chart
+  // or clicking a symbol) so background polling can never starve the page being viewed. Only
+  // reserve when the cap is comfortably above the reservation — a tiny cap has no headroom.
+  const INTERACTIVE_RESERVE = 2;
+  const cap = settings.budget.twelvedataPerMinute;
+  const perMinute = isMetered
+    ? Math.max(1, cap - (cap >= 2 * INTERACTIVE_RESERVE ? INTERACTIVE_RESERVE : 0))
+    : Infinity;
   const perDay = isMetered ? settings.budget.twelvedataPerDay : Infinity;
   const apiKey = isMetered ? getTwelveDataKey() : null;
 

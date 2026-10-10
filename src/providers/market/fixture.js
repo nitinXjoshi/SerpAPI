@@ -75,4 +75,48 @@ export const fixtureProvider = {
     });
     return { quotes, failed: [], creditsUsed: 0 };
   },
+
+  /**
+   * Deterministic synthetic candles — DEMO MODE ONLY. Every bar is generated from a
+   * fixed hash so it is stable, and the response is flagged `synthetic: true` so the UI
+   * can label it. Never used outside demo mode.
+   */
+  async fetchCandles(symbol, { interval = '1day', outputsize = 180 } = {}) {
+    const sym = String(symbol || '').toUpperCase();
+    const p = profileFor(sym);
+    const daily = ['1day', '1week', '1month'].includes(interval);
+    const n = Math.min(Math.max(Number(outputsize) || 180, 5), 500);
+    const round2 = (x) => Math.round(x * 100) / 100;
+    const bars = [];
+    let price = p.base * 0.85;
+    const day = 86400;
+    const start = Math.floor(Date.now() / 1000) - n * day;
+    for (let i = 0; i < n; i++) {
+      const h = hash(`${sym}:${i}`);
+      const open = price;
+      const close = Math.max(1, open * (1 + (h - 0.5) * 0.02));
+      const high = Math.max(open, close) * (1 + h * 0.01);
+      const low = Math.min(open, close) * (1 - h * 0.01);
+      const t = start + i * day;
+      bars.push({
+        time: daily ? new Date(t * 1000).toISOString().slice(0, 10) : t,
+        open: round2(open),
+        high: round2(high),
+        low: round2(low),
+        close: round2(close),
+        volume: Math.round(1e6 * (0.5 + h)),
+      });
+      price = close;
+    }
+    return {
+      bars,
+      meta: { symbol: sym, interval, timezone: 'UTC', currency: 'USD', synthetic: true },
+      creditsUsed: 0,
+      synthetic: true,
+    };
+  },
+
+  async searchSymbols() {
+    return { results: [], creditsUsed: 0, synthetic: true, error: 'Symbol search is unavailable in demo mode.' };
+  },
 };

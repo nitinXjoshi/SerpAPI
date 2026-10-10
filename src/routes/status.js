@@ -9,6 +9,7 @@ import { schedulerState } from '../scheduler.js';
 import { ollamaStatus } from '../ollama/client.js';
 import { buildRadar } from '../market/radar.js';
 import { resolveSerpApiKey, fetchSerpApiAccount } from '../serpapi.js';
+import { authMode } from '../security/auth.js';
 
 const router = Router();
 
@@ -47,7 +48,7 @@ router.get('/', async (_req, res) => {
     now: new Date().toISOString(),
     demoMode: demo,
     readOnly: demo,
-    authMode: demo ? 'demo' : 'required',
+    authMode: authMode(),
     node: process.version,
     ollama,
     providers: {

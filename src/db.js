@@ -139,6 +139,13 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `
+      ALTER TABLE cycles ADD COLUMN articles_seen INTEGER;
+      ALTER TABLE cycles ADD COLUMN articles_duplicate INTEGER;
+    `,
+  },
 ];
 
 let db = null;

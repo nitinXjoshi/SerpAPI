@@ -20,7 +20,10 @@ export function buildQueryPlan({ watchlist = [], settings, now = new Date() } = 
   const push = (spec) => {
     if (seen.has(spec.id)) return;
     seen.add(spec.id);
-    specs.push({ gl: 'us', hl: 'en', so: '1', ...spec });
+    // NOTE: SerpApi's google_news engine rejects `q` combined with advanced parameters
+    // such as `so` ("`q` and `so` parameters can't be used together"), so we do not set
+    // `so` on q-based queries. Ordering is handled by the query priority instead.
+    specs.push({ gl: 'us', hl: 'en', ...spec });
   };
 
   if (settings?.news?.companyQueries !== false) {

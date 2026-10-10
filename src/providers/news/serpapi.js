@@ -12,7 +12,8 @@ export const serpapiNewsProvider = {
     const params = {};
     if (spec.gl) params.gl = spec.gl;
     if (spec.hl) params.hl = spec.hl;
-    if (spec.so) params.so = spec.so;
+    // Defence in depth: google_news rejects `so` when `q` is present.
+    if (spec.so && !spec.q) params.so = spec.so;
     const { status, data, creditsUsed, cached, error } = await callSerpApi(
       spec.engine || 'google_news',
       spec.q,

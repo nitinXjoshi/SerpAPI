@@ -44,7 +44,9 @@ test('market status, budget-safe chunking and provider failures', async () => {
   assert.equal(r.reason, 'per_minute_limit');
 
   // --- a 429 from the provider is surfaced, not thrown ---
-  saveSettings({ budget: { twelvedataPerMinute: 8 } });
+  // The poller now reserves part of the per-minute allowance for interactive requests, so use a
+  // cap with room for the already-recorded usage above plus that reservation.
+  saveSettings({ budget: { twelvedataPerMinute: 20 } });
   globalThis.fetch = async () => ({
     status: 429,
     headers: { get: () => null },
